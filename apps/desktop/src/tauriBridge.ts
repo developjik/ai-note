@@ -14,6 +14,8 @@ export function installBridge(
     __aiNoteBridge?: unknown;
     __aiNoteSettings?: unknown;
     __aiNoteWorkspace?: unknown;
+    __aiNoteReview?: unknown;
+    __aiNoteHistory?: unknown;
   }
 ) {
   const invoke = invokeFactory();
@@ -26,6 +28,15 @@ export function installBridge(
     subscriptionGuide: () => typed("subscription_guide"),
     connectInvitation: (invitation: string, passphrase: string) =>
       typed("connect_invitation", { invitation, passphrase }),
+  };
+  windowObj.__aiNoteReview = {
+    inbox: () => typed("review_inbox"),
+    diffOf: (id: string) => typed("review_diff", { id }),
+    approve: (id: string) => typed("review_approve", { id }),
+    reject: (id: string) => typed("review_reject", { id }),
+  };
+  windowObj.__aiNoteHistory = {
+    history: () => typed("history_list"),
   };
   windowObj.__aiNoteWorkspace = {
     listDir: (dir: string) => typed("workspace_list", { dir }),

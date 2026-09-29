@@ -104,7 +104,7 @@ impl ChangesetStore {
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                  ON CONFLICT(id) DO UPDATE SET
                     state=excluded.state, summary=excluded.summary,
-                    base_commit=excluded.base_commit,
+                    base_commit=excluded.base_commit, origin=excluded.origin,
                     pr_number=COALESCE(excluded.pr_number, pr_number),
                     files_json=excluded.files_json, updated_at=datetime('now')",
                 rusqlite::params![
@@ -190,6 +190,28 @@ impl ChangesetStore {
             out.push(r.map_err(|e| e.to_string())?);
         }
         Ok(out)
+    }
+
+    /// 해소 재시도 횟수(R7).
+    pub fn get_resolution_retries(&self, id: &str) -> Result<u32, String> {
+        self.conn
+            .query_row(
+                "SELECT resolution_retries FROM changesets WHERE id=?1",
+                rusqlite::params![id],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|v| v.max(0) as u32)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn set_resolution_retries(&self, id: &str, n: u32) -> Result<(), String> {
+        self.conn
+            .execute(
+                "UPDATE changesets SET resolution_retries=?2, updated_at=datetime('now') WHERE id=?1",
+                rusqlite::params![id, n as i64],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     /// 전체 개수(진단).

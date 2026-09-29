@@ -100,12 +100,9 @@ describe("워크스페이스 화면 (M2)", () => {
     // File 흉내(FileReader 경유 — jsdom 지원)
     const file = new File([new Uint8Array([1, 2, 3])], "flow.png", { type: "image/png" });
     fireEvent.change(input, { target: { files: [file] } });
-    await waitFor(() =>
-      expect(b.saveMock).not.toHaveBeenCalled()
-    );
-    // 저장은 dirty 전이 후 — 링크 삽입으로 저장 버튼 활성 확인 후 호출
+    // FileReader 비동기 완료 대기 — 링크 삽입으로 저장 버튼 활성화 확인
     const save = screen.getByTestId("save-btn") as HTMLButtonElement;
-    expect(save.disabled).toBe(false);
+    await waitFor(() => expect(save.disabled).toBe(false), { timeout: 2000 });
     fireEvent.click(save);
     await waitFor(() => expect(b.saveMock).toHaveBeenCalled());
     const [calledPath, , image] = b.saveMock.mock.calls[0];

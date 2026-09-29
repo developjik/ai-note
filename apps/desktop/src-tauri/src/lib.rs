@@ -350,6 +350,147 @@ async fn agent_run_task(
     Ok(SaveResult { pr_number: pr_number as i64, summary })
 }
 
+// ── M4: 검토함·이력 브리지 ─────────────────────────────────────────
+
+#[tauri::command]
+fn review_inbox(app: tauri::AppHandle) -> Result<Vec<ai_note_core::review::ReviewCard>, String> {
+    let dir = app_data(&app)?;
+    let store = ai_note_core::state::ChangesetStore::open(&dir.join("state.db"))?;
+    ai_note_core::review::inbox(&store)
+}
+
+#[tauri::command]
+fn history_list(app: tauri::AppHandle) -> Result<Vec<ai_note_core::review::HistoryRow>, String> {
+    let dir = app_data(&app)?;
+    let store = ai_note_core::state::ChangesetStore::open(&dir.join("state.db"))?;
+    ai_note_core::review::history(&store)
+}
+
+#[tauri::command]
+fn review_diff(app: tauri::AppHandle, id: String) -> Result<Vec<ai_note_core::review::DiffChunk>, String> {
+    // 대상 문서의 main 원문 ↔ cs 제안 본문 단어 diff
+    let dir = app_data(&app)?;
+    let store = ai_note_core::state::ChangesetStore::open(&dir.join("state.db"))?;
+    let (cs, _) = store
+        .get(&id)?
+        .ok_or_else(|| format!("없는 변경이에요: {id}"))?;
+    let vault = open_vault(&app)?;
+    let mut chunks = Vec::new();
+    for f in &cs.files {
+        let old = ai_note_core::vault::read_file(&vault, &f.path)
+            .map(|b| String::from_utf8_lossy(&b).to_string())
+            .unwrap_or_default();
+        let new = f.content.clone().unwrap_or_default();
+        let mut file_chunks = ai_note_core::review::word_diff(&old, &new);
+        chunks.append(&mut file_chunks);
+    }
+    Ok(chunks)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum ReviewActionDto {
+    Applied,
+    Already,
+    Resolving,
+    Rejected,
+}
+
+#[tauri::command]
+async fn review_approve(app: tauri::AppHandle, id: String) -> Result<ReviewActionDto, String> {
+    use tauri::Emitter;
+    let (gh, owner_repo, pat) = {
+        let app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || github_from_custody(&app))
+            .await
+            .map_err(|e| e.to_string())?
+    }?;
+    let id_for_load = id.clone();
+    let (cs, _dir) = {
+        let app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || -> Result<(ai_note_core::changeset::Changeset, std::path::PathBuf), String> {
+            let dir = app_data(&app)?;
+            let store = ai_note_core::state::ChangesetStore::open(&dir.join("state.db"))?;
+            let (mut cs, _) = store.get(&id_for_load)?.ok_or("없는 변경이에요")?;
+            cs.state = ai_note_core::changeset::CsState::PendingReview;
+            Ok((cs, dir))
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }?;
+    // 승인 — Repository·Store는 !Send: 단일 스레드 런타임을 blocking
+    // 스레드 안에서 돌려 외부 await 경계를 넘지 않게 한다(S2 원칙).
+    let action = {
+        let app = app.clone();
+        let owner_repo = owner_repo.clone();
+        let pat = pat.clone();
+        let cs_id = cs.id.clone();
+        tauri::async_runtime::spawn_blocking(move || -> Result<ai_note_core::review::ReviewAction, String> {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| e.to_string())?;
+            let _guard = GIT_OPS_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            rt.block_on(async move {
+                let vault = open_vault(&app)?;
+                let dir = app_data(&app)?;
+                let remote_url = remote_url_of(&vault, &owner_repo);
+                let store = ai_note_core::state::ChangesetStore::open(&dir.join("state.db"))?;
+                let (mut cs, _) = store.get(&cs_id)?.ok_or("없는 변경이에요")?;
+                cs.state = ai_note_core::changeset::CsState::PendingReview;
+                ai_note_core::review::approve(&vault, &gh, &owner_repo, &remote_url, &pat, &store, &mut cs)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }?;
+    // 알림은 리뷰 파이프라인이 생성(F6 귀속)
+    let notice = match &action {
+        ai_note_core::review::ReviewAction::Applied { author_display, .. } => {
+            format!("{author_display}님 변경이 반영됐어요")
+        }
+        ai_note_core::review::ReviewAction::AlreadyApplied { .. } => "이미 반영된 변경이에요".to_string(),
+        ai_note_core::review::ReviewAction::Resolving { author_display, .. } => {
+            format!("{author_display}님 변경을 조정 중이에요 — 끝나면 다시 확인해 주세요")
+        }
+        ai_note_core::review::ReviewAction::Rejected { .. } => "도로 돌렸어요".to_string(),
+        ai_note_core::review::ReviewAction::Cancelled { .. } => "자동으로 접었어요".to_string(),
+    };
+    let _ = app.emit("review-event", serde_json::json!({ "id": id, "notice": notice }));
+    Ok(match action {
+        ai_note_core::review::ReviewAction::Applied { .. } => ReviewActionDto::Applied,
+        ai_note_core::review::ReviewAction::AlreadyApplied { .. } => ReviewActionDto::Already,
+        ai_note_core::review::ReviewAction::Resolving { .. } => ReviewActionDto::Resolving,
+        _ => ReviewActionDto::Rejected,
+    })
+}
+
+#[tauri::command]
+async fn review_reject(app: tauri::AppHandle, id: String) -> Result<ReviewActionDto, String> {
+    use tauri::Emitter;
+    let action = {
+        let app = app.clone();
+        let id = id.clone();
+        tauri::async_runtime::spawn_blocking(move || -> Result<ai_note_core::review::ReviewAction, String> {
+            let dir = app_data(&app)?;
+            let store = ai_note_core::state::ChangesetStore::open(&dir.join("state.db"))?;
+            let (mut cs, _) = store.get(&id)?.ok_or("없는 변경이에요")?;
+            ai_note_core::review::reject(&store, &mut cs)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }?;
+    if let ai_note_core::review::ReviewAction::Rejected { author_display, .. } = &action {
+        let _ = app.emit(
+            "review-event",
+            serde_json::json!({ "id": id, "notice": ai_note_core::review::reject_guidance(author_display) }),
+        );
+    }
+    Ok(ReviewActionDto::Rejected)
+}
+
 #[tauri::command]
 fn account_display() -> Result<String, String> {
     ai_note_core::token_custody::load_display()
@@ -434,6 +575,11 @@ pub fn run() {
             claude_manual_steps,
             subscription_state,
             subscription_guide,
+            review_inbox,
+            review_diff,
+            review_approve,
+            review_reject,
+            history_list,
             agent_run_task,
             workspace_list,
             workspace_read,
