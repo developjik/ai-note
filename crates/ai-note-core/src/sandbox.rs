@@ -180,15 +180,17 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let scratch = tmp.path().join("s");
         std::fs::create_dir_all(&scratch).unwrap();
-        // 부모에 토큰 심어두고 자식에서 관측 시도
-        // (안전: env_set은 이 프로세스에만 — 테스트 격리)
+        // 부모에 토큰을 실제로 심어 env_clear 효력을 증명(F5 — 시딩 없으면
+        // env_clear와 무관하게 통과하는 허술한 테스트가 됨). 즉시 제거.
+        std::env::set_var("GITHUB_TOKEN", "ghp_should_not_leak");
         let probe = run_sandboxed(
             "/bin/sh",
             &["-c".to_string(), "env | grep -c GITHUB_TOKEN || true".to_string()],
             &scratch,
             &[],
         );
-        assert_eq!(probe.stdout.trim(), "0", "자식에 토큰 환경 없음");
+        std::env::remove_var("GITHUB_TOKEN");
+        assert_eq!(probe.stdout.trim(), "0", "자식에 토큰 환경 없음(env_clear 효력)");
     }
 
     /// 비macOS에서는 명시적 미지원(안전 거부) — 시그니처 호환.

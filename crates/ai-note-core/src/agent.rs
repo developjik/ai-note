@@ -312,7 +312,7 @@ mod tests {
         assert!(detect_vault_tampering(&vault, &known_future).is_none(), "무변경");
     }
 
-    /// S1 기반 claude 명령줄 조립(stream-json) — 문자열 단위 검증.
+    /// S1 기반 claude 명령줄 조립(stream-json + L1 권한 플래그).
     #[test]
     fn m3_claude_command_shape() {
         let args = claude_args("지시문");
@@ -321,18 +321,41 @@ mod tests {
         assert!(args.windows(2).any(|w| w == ["--output-format", "stream-json"]));
         assert!(args.contains(&"--verbose".to_string()));
         assert!(args.last() == Some(&"지시문".to_string()));
+        // L1 게이트: 권한 플래그 포함 + 게이트 통과
+        assert!(args.windows(2).any(|w| w == [L1_PERMISSION_FLAG, L1_PERMISSION_VALUE]));
+        assert!(enforce_l1_gate(&args).is_ok());
+        // 플래그 없는 인자 목록은 기동 거부
+        let bare = vec!["--print".to_string()];
+        assert!(enforce_l1_gate(&bare).is_err());
     }
 }
 
 /// S1 실측 프로토콜 — claude CLI 인자 조립(테스트가 형상 검증).
+/// L1 게이트(S6 승격 요구사항): `--permission-mode acceptEdits`로 자식
+/// 스스로 권한을 좁힌다(파일 편집 자동 수용, 그 외 도구는 --print에서
+/// 자동 거부). 이 플래그 없이는 에이전트를 기동하지 않는다.
+pub const L1_PERMISSION_FLAG: &str = "--permission-mode";
+pub const L1_PERMISSION_VALUE: &str = "acceptEdits";
+
 pub fn claude_args(prompt: &str) -> Vec<String> {
     vec![
         "--print".into(),
         "--output-format".into(),
         "stream-json".into(),
         "--verbose".into(),
+        L1_PERMISSION_FLAG.into(),
+        L1_PERMISSION_VALUE.into(),
         prompt.into(),
     ]
+}
+
+/// L1 게이트 검사 — 인자 목록에 권한 플래그가 없으면 Err(기동 거부).
+pub fn enforce_l1_gate(args: &[String]) -> Result<(), String> {
+    if args.iter().any(|a| a == L1_PERMISSION_FLAG) {
+        Ok(())
+    } else {
+        Err("AI 도우미를 안전 모드로 시작하지 못했어요 (권한 제한 플래그 누락)".into())
+    }
 }
 
 // ── claude 실 어댑터(작업사본 스냅숏 → 실행 → diff 수집) ─────────────
@@ -418,6 +441,8 @@ impl AgentRunner for ClaudeAdapter {
         let snapshot = snapshot_for_task(&sandbox.workdir, &sandbox.snapshot_files);
         std::fs::create_dir_all(&snapshot).map_err(|e| format!("작업 공간 준비 실패: {e}"))?;
         let args = crate::agent::claude_args(&prompt);
+        // L1 게이트: 플래그 없는 기동은 앱이 거부한다(S6 승격 요구사항)
+        crate::agent::enforce_l1_gate(&args)?;
         let out = crate::sandbox::run_sandboxed(&self.claude_bin, &args, &sandbox.workdir, &[]);
         if out.unsupported_platform {
             return Err(out.stderr);
