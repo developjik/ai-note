@@ -30,10 +30,6 @@ export function SettingsScreen({ bridge }: { bridge?: SettingsBridge }) {
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
 
   useEffect(() => {
-    b?.checkUpdate?.().then(setUpdate).catch(() => setUpdate(null));
-  }, [b]);
-
-  useEffect(() => {
     if (!b) return;
     (async () => {
       setDisplay(await b.accountDisplay());
