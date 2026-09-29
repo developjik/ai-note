@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "AI Note 데스크톱 앱 Rust 코어 — 볼트·git·에이전트·리뷰·초대장 모듈"
 
+[features]
+test-vectors = []
+
 [dependencies]
 anyhow.workspace = true
 thiserror.workspace = true
