@@ -44,6 +44,9 @@ pub struct CsFile {
     pub path: String,
     /// 새 내용(삭제는 None).
     pub content: Option<String>,
+    /// 이미지 등 이진 자산(base64) — 자산 폴더 보관(F30).
+    #[serde(default)]
+    pub binary_b64: Option<String>,
 }
 
 /// 변경 세트 — 반영 단위(D0 §1).
@@ -133,6 +136,7 @@ mod tests {
             files: vec![CsFile {
                 path: "회의/2026-09-30.md".into(),
                 content: Some("# 회의".into()),
+                binary_b64: None,
             }],
             origin: CsOrigin::Edit,
             state,
@@ -207,24 +211,24 @@ mod tests {
 
     #[test]
     fn m2_heuristic_summary_everyday_language() {
-        let single = vec![CsFile { path: "회의/2026-09-30.md".into(), content: Some("x".into()) }];
+        let single = vec![CsFile { path: "회의/2026-09-30.md".into(), content: Some("x".into()), binary_b64: None }];
         let s = heuristic_summary(&single);
         assert!(s.contains("회의록 정리") || s.contains("고침"), "요약: {s}");
         // 어휘 감사(A1) — 요약은 사용자 표시 문자열
         assert!(crate::ui_strings::audit_no_git_vocabulary(&s, crate::ui_strings::Scope::App).is_empty());
 
         let multi = vec![
-            CsFile { path: "회의/a.md".into(), content: Some("x".into()) },
-            CsFile { path: "회의/b.md".into(), content: Some("y".into()) },
+            CsFile { path: "회의/a.md".into(), content: Some("x".into()), binary_b64: None },
+            CsFile { path: "회의/b.md".into(), content: Some("y".into()), binary_b64: None },
         ];
         assert!(heuristic_summary(&multi).contains("2개"));
 
-        let del = vec![CsFile { path: "메모/오래된.md".into(), content: None }];
+        let del = vec![CsFile { path: "메모/오래된.md".into(), content: None, binary_b64: None }];
         assert!(heuristic_summary(&del).contains("지움"));
 
         let mixed = vec![
-            CsFile { path: "a.md".into(), content: Some("x".into()) },
-            CsFile { path: "b.md".into(), content: None },
+            CsFile { path: "a.md".into(), content: Some("x".into()), binary_b64: None },
+            CsFile { path: "b.md".into(), content: None, binary_b64: None },
         ];
         let s = heuristic_summary(&mixed);
         assert!(s.contains("고치고") && s.contains("지움"), "{s}");

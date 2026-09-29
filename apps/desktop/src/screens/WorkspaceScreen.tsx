@@ -24,7 +24,11 @@ export interface WorkspaceBridge {
   listDir(dir: string): Promise<TreeEntryDto[]>;
   readFile(path: string): Promise<string>;
   searchVault(query: string): Promise<SearchHitDto[]>;
-  saveDocument(path: string, content: string): Promise<{ pr_number: number; summary: string }>;
+  saveDocument(
+    path: string,
+    content: string,
+    image?: { name: string; b64: string }
+  ): Promise<{ pr_number: number; summary: string }>;
 }
 
 declare global {
@@ -42,6 +46,7 @@ export function WorkspaceScreen({ bridge }: { bridge?: WorkspaceBridge }) {
   const [hits, setHits] = useState<SearchHitDto[]>([]);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "done" | "error">("idle");
   const [saveMessage, setSaveMessage] = useState("");
+  const [pendingImage, setPendingImage] = useState<{ name: string; b64: string } | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const hostRef = useRef<HTMLDivElement | null>(null);
 
@@ -104,13 +109,36 @@ export function WorkspaceScreen({ bridge }: { bridge?: WorkspaceBridge }) {
     setHits(await b.searchVault(query));
   }
 
+  async function onPickImage(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const b64 = await fileToB64(file);
+    // 편집 중 문서에 자산 링크 삽입(상대 경로 — F30)
+    const link = `![${file.name.replace(/\.[^.]+$/, "")}](../자산/${file.name})`;
+    setPendingImage({ name: file.name, b64 });
+    setContent((c) => c + (c.endsWith("\n") || c === "" ? "" : "\n") + link);
+  }
+
+  function fileToB64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const r = String(reader.result);
+        resolve(r.slice(r.indexOf(",") + 1)); // data:...;base64, 제거
+      };
+      reader.onerror = () => reject(new Error("이미지를 읽지 못했어요"));
+      reader.readAsDataURL(file);
+    });
+  }
+
   async function save() {
     if (!b || !openPath) return;
     setSaveState("saving");
     try {
-      const r = await b.saveDocument(openPath, content);
+      const r = await b.saveDocument(openPath, content, pendingImage ?? undefined);
       setSaveState("done");
       setOriginal(content);
+      setPendingImage(null);
       setSaveMessage(`${ui.workspace.saved}: ${r.summary}`);
       // 검토함 갱신 — 목록 재조회
       setEntries(await b.listDir(""));
@@ -121,6 +149,7 @@ export function WorkspaceScreen({ bridge }: { bridge?: WorkspaceBridge }) {
   }
 
   const dirty = content !== original;
+  const isHtml = openPath?.toLowerCase().endsWith(".html") || openPath?.toLowerCase().endsWith(".htm");
   const previewNodes = useMemo(() => (preview ? renderMarkdown(content) : []), [preview, content]);
 
   return (
@@ -152,7 +181,7 @@ export function WorkspaceScreen({ bridge }: { bridge?: WorkspaceBridge }) {
               <li key={e.path}>
                 <button
                   data-testid={`tree-${e.name}`}
-                  onClick={() => e.kind === "Document" && openDoc(e.path)}
+                  onClick={() => (e.kind === "Document" || e.kind === "ReadOnly") && openDoc(e.path)}
                 >
                   {e.kind === "Folder" ? "📁" : "📄"} {e.name}
                 </button>
@@ -167,17 +196,45 @@ export function WorkspaceScreen({ bridge }: { bridge?: WorkspaceBridge }) {
           <>
             <header>
               <span data-testid="open-path">{openPath}</span>
-              <button
-                data-testid="preview-toggle"
-                onClick={() => setPreview((p) => !p)}
-              >
-                {preview ? ui.workspace.editMode : ui.workspace.previewMode}
-              </button>
-              <button data-testid="save-btn" disabled={!dirty || saveState === "saving"} onClick={save}>
-                {saveState === "saving" ? ui.workspace.saving : ui.workspace.save}
-              </button>
+              {!isHtml && (
+                <button
+                  data-testid="preview-toggle"
+                  onClick={() => setPreview((p) => !p)}
+                >
+                  {preview ? ui.workspace.editMode : ui.workspace.previewMode}
+                </button>
+              )}
+              {!isHtml && (
+              <label className="image-pick">
+                {ui.workspace.addImage}
+                <input
+                  data-testid="image-input"
+                  type="file"
+                  accept="image/*"
+                  onChange={onPickImage}
+                  hidden
+                />
+              </label>
+              )}
+              {!isHtml && (
+                <button
+                  data-testid="save-btn"
+                  disabled={(!dirty && !pendingImage) || saveState === "saving"}
+                  onClick={save}
+                >
+                  {saveState === "saving" ? ui.workspace.saving : ui.workspace.save}
+                </button>
+              )}
             </header>
-            {preview ? (
+            {isHtml ? (
+              <iframe
+                data-testid="readonly-html"
+                title={openPath}
+                sandbox=""
+                srcDoc={content}
+                style={{ width: "100%", height: "60vh", border: "1px solid #ccd" }}
+              />
+            ) : preview ? (
               <div data-testid="preview-pane">
                 {previewNodes.map((n, i) => (
                   <PreviewBlock key={i} node={n} />

@@ -178,6 +178,27 @@ pub fn commit_cs(
         .read_tree(&base_tree)
         .map_err(|e| GitError::Other(format!("기준 트리 적재 실패: {e}")))?;
     for f in &cs.files {
+        // 이진 자산(이미지 — F30): base64 해제 후 버퍼 반영
+        if let Some(b64) = &f.binary_b64 {
+            use base64::Engine;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(b64)
+                .map_err(|e| GitError::Other(format!("자산 해석 실패({}): {e}", f.path)))?;
+            index
+                .add_frombuffer(
+                    &git2::IndexEntry {
+                        ctime: git2::IndexTime::new(0, 0),
+                        mtime: git2::IndexTime::new(0, 0),
+                        dev: 0, ino: 0, mode: 0o100644, uid: 0, gid: 0,
+                        file_size: bytes.len() as u32,
+                        id: git2::Oid::zero(), flags: 0, flags_extended: 0,
+                        path: f.path.clone().into_bytes(),
+                    },
+                    &bytes,
+                )
+                .map_err(|e| GitError::Other(format!("자산 반영 실패({}): {e}", f.path)))?;
+            continue;
+        }
         match &f.content {
             Some(content) => {
                 index
@@ -440,7 +461,7 @@ mod tests {
             author_display: "김하나".into(),
             summary: "테스트 변경".into(),
             base_commit: base.into(),
-            files: vec![crate::changeset::CsFile { path: path.into(), content: Some(content.into()) }],
+            files: vec![crate::changeset::CsFile { path: path.into(), content: Some(content.into()), binary_b64: None }],
             origin: crate::changeset::CsOrigin::Edit,
             state: crate::changeset::CsState::PendingReview,
         }
@@ -557,5 +578,43 @@ mod tests {
             Err(GitError::Conflict) => { /* resolving 경로 유도 — 성공 */ }
             other => panic!("충돌이어야 함: {other:?}"),
         }
+    }
+
+    /// 이미지 자산(F30) — cs에 base64 자산이 포함되면 무전환 커밋에 반영.
+    #[test]
+    fn m2_commit_cs_with_binary_asset() {
+        let (_tmp, vault, _url) = setup_origin_and_vault();
+        let main = head_of(&vault, "refs/heads/main");
+        use base64::Engine;
+        let png_b64 = base64::engine::general_purpose::STANDARD.encode([0x89, b'P', b'N', b'G', 1, 2, 3]);
+        let cs = crate::changeset::Changeset {
+            id: "2026-img".into(),
+            author_display: "김하나".into(),
+            summary: "이미지 추가".into(),
+            base_commit: main,
+            files: vec![
+                crate::changeset::CsFile {
+                    path: "회의/다이어그램.md".into(),
+                    content: Some("# 도식\n![흐름](../자산/flow.png)".into()),
+                    binary_b64: None,
+                },
+                crate::changeset::CsFile {
+                    path: "자산/flow.png".into(),
+                    content: None,
+                    binary_b64: Some(png_b64),
+                },
+            ],
+            origin: crate::changeset::CsOrigin::Edit,
+            state: crate::changeset::CsState::PendingReview,
+        };
+        let oid = commit_cs(&vault, &cs).unwrap();
+        let commit = vault.find_commit(git2::Oid::from_str(&oid).unwrap()).unwrap();
+        let tree = commit.tree().unwrap();
+        // 자산 폴더에 바이너리 blob 존재 + 크기 일치
+        let entry = tree.get_path(std::path::Path::new("자산/flow.png")).unwrap();
+        let blob = vault.find_blob(entry.id()).unwrap();
+        assert_eq!(blob.content(), &[0x89, b'P', b'N', b'G', 1, 2, 3]);
+        // 문서도 동시 반영
+        assert!(tree.get_path(std::path::Path::new("회의/다이어그램.md")).is_ok());
     }
 }

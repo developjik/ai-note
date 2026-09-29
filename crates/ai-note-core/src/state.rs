@@ -225,7 +225,7 @@ mod tests {
             author_display: "김하나".into(),
             summary: "회의록 정리".into(),
             base_commit: "abc".into(),
-            files: vec![CsFile { path: "회의/a.md".into(), content: Some("# A".into()) }],
+            files: vec![CsFile { path: "회의/a.md".into(), content: Some("# A".into()), binary_b64: None }],
             origin: CsOrigin::Edit,
             state,
         }

@@ -17,6 +17,7 @@ export const ui = {
     save: "저장",
     saving: "저장 중…",
     saved: "검토에 보냈어요",
+    addImage: "이미지 넣기",
   },
   review: { title: "검토함", approve: "반영하기", reject: "도로 돌리기" },
   history: { title: "지난 기록", applied: "반영됨", rejected: "도로 돌림" },

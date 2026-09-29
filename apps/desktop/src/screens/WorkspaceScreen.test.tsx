@@ -91,6 +91,44 @@ describe("워크스페이스 화면 (M2)", () => {
     expect(pane.textContent).toContain("회의");
   });
 
+  it("이미지 선택 → 자산 링크 삽입 + 저장 페이로드에 자산 포함(F30)", async () => {
+    const b = fakeBridge();
+    render(<WorkspaceScreen bridge={b} />);
+    fireEvent.click(await screen.findByTestId("tree-0930.md"));
+    await screen.findByTestId("open-path");
+    const input = screen.getByTestId("image-input") as HTMLInputElement;
+    // File 흉내(FileReader 경유 — jsdom 지원)
+    const file = new File([new Uint8Array([1, 2, 3])], "flow.png", { type: "image/png" });
+    fireEvent.change(input, { target: { files: [file] } });
+    await waitFor(() =>
+      expect(b.saveMock).not.toHaveBeenCalled()
+    );
+    // 저장은 dirty 전이 후 — 링크 삽입으로 저장 버튼 활성 확인 후 호출
+    const save = screen.getByTestId("save-btn") as HTMLButtonElement;
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() => expect(b.saveMock).toHaveBeenCalled());
+    const [calledPath, , image] = b.saveMock.mock.calls[0];
+    expect(calledPath).toBe("회의/0930.md");
+    expect(image?.name).toBe("flow.png");
+    expect(typeof image?.b64).toBe("string");
+  });
+
+  it("html 문서는 읽기 전용 미리보기(편집 불가, F12)", async () => {
+    const b = fakeBridge();
+    (b as unknown as { readFile: ReturnType<typeof vi.fn> }).readFile = vi.fn(
+      async () => "<h1>보고서</h1><script>alert(1)</script>"
+    );
+    (b as unknown as { listDir: ReturnType<typeof vi.fn> }).listDir = vi.fn(async () => [
+      { name: "보고서.html", path: "보고서.html", kind: "ReadOnly" as const },
+    ]);
+    render(<WorkspaceScreen bridge={b} />);
+    fireEvent.click(await screen.findByTestId("tree-보고서.html"));
+    const frame = await screen.findByTestId("readonly-html");
+    expect(frame.getAttribute("sandbox")).toBe("");
+    expect(frame.getAttribute("srcdoc")).toContain("보고서");
+  });
+
   it("화면 문자열에 git 어휘 없음(A1/E2E-5)", async () => {
     const { container } = render(<WorkspaceScreen bridge={fakeBridge()} />);
     await screen.findByTestId("doc-tree");

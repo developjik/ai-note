@@ -4,7 +4,13 @@
 //! M1: 온보딩(claude 감지·수동 안내·초대장 연결) 명령 추가.
 
 use serde::Serialize;
+use std::sync::Mutex;
 use tauri::Manager;
+
+/// 모든 git 조작 직렬화(D 단일 작성자 — S2 !Send 원칙의 런타임 보강).
+/// 코어가 함수별 &Repository를 받는 한 동시 호출이 같은 저장소를 물 수
+/// 있어 브리지 경계에서 잠근다.
+static GIT_OPS_LOCK: Mutex<()> = Mutex::new(());
 
 #[tauri::command]
 fn ui_string(key: String) -> String {
@@ -76,6 +82,7 @@ fn workspace_list(app: tauri::AppHandle, dir: String) -> Result<Vec<ai_note_core
     let vault = open_vault(&app)?;
     ai_note_core::vault::list_dir(&vault, &dir)
 }
+// 읽기 경로는 git2 객체 조회만 사용(인덱스 조작 아님) — 락 없이 안전.
 
 #[tauri::command]
 fn workspace_read(app: tauri::AppHandle, path: String) -> Result<String, String> {
@@ -91,6 +98,12 @@ fn workspace_search(app: tauri::AppHandle, query: String) -> Result<Vec<ai_note_
     index.search(&query, 20)
 }
 
+#[derive(serde::Deserialize, Clone)]
+pub struct ImagePayload {
+    pub name: String,
+    pub b64: String,
+}
+
 #[derive(serde::Serialize)]
 pub struct SaveResult {
     pub pr_number: i64,
@@ -102,6 +115,7 @@ async fn workspace_save(
     app: tauri::AppHandle,
     path: String,
     content: String,
+    image: Option<ImagePayload>,
 ) -> Result<SaveResult, String> {
     // (gh, owner_repo, pat) — 자격·원격 주소(동기)
     let (gh, owner_repo, pat) = {
@@ -119,8 +133,10 @@ async fn workspace_save(
         let app2 = app.clone();
         let path = path.clone();
         let content = content.clone();
+        let image = image.clone();
         let owner_repo = owner_repo_inner;
         tauri::async_runtime::spawn_blocking(move || -> Result<(ai_note_core::changeset::Changeset, std::path::PathBuf), String> {
+            let _guard = GIT_OPS_LOCK.lock().unwrap_or_else(|p| p.into_inner());
             let vault = open_vault(&app2)?;
             let dir = app_data(&app2)?;
             let author = ai_note_core::token_custody::load_display().map_err(|e| e.to_string())?;
@@ -136,10 +152,19 @@ async fn workspace_save(
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            let files = vec![ai_note_core::changeset::CsFile {
+            let mut files = vec![ai_note_core::changeset::CsFile {
                 path,
                 content: Some(content),
+                binary_b64: None,
             }];
+            // 이미지 선택(선택) — 자산 폴더로(F30)
+            if let Some(img) = &image {
+                files.push(ai_note_core::changeset::CsFile {
+                    path: format!("자산/{}", img.name),
+                    content: None,
+                    binary_b64: Some(img.b64.clone()),
+                });
+            }
             let summary = ai_note_core::changeset::heuristic_summary(&files);
             let mut cs = ai_note_core::changeset::Changeset {
                 id: format!("{now}-{author}"),

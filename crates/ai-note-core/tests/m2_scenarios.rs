@@ -47,7 +47,7 @@ fn cs_fixture(id: &str, base: &str, path: &str, content: &str) -> Changeset {
         author_display: "김하나".into(),
         summary: "회의록 정리".into(),
         base_commit: base.into(),
-        files: vec![CsFile { path: path.into(), content: Some(content.into()) }],
+        files: vec![CsFile { path: path.into(), content: Some(content.into()), binary_b64: None }],
         origin: CsOrigin::Edit,
         state: CsState::Draft,
     }
