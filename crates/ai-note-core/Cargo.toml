@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 description = "AI Note 데스크톱 앱 Rust 코어 — 볼트·git·에이전트·리뷰·초대장 모듈"
 
+[[example]]
+name = "codec_gen"
+required-features = ["test-vectors"]
+
 [features]
 test-vectors = []
 
@@ -15,6 +19,13 @@ thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+
+# 로컬 영속 상태 (M2 — 변경 세트 상태·PR 메타·ETag 캐시)
+# F14: 토큰은 절대 여기 두지 않는다(키체인 전용)
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# 전문 검색 색인 (M2 — S3 채택: 내장 Ngram 빅그램)
+tantivy = "0.22"
 
 # git 계층 (M1 — S2 증명 기반)
 git2 = "0.20"

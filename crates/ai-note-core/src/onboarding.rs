@@ -63,17 +63,27 @@ pub async fn connect_and_record(
     passphrase: &str,
     vault_root: &Path,
 ) -> Result<ConnectOutcome, ConnectError> {
-    let out = connect_in(env, invitation, passphrase, vault_root).await?;
-    let app_data = vault_root.to_path_buf();
+    connect_in_recorded(env, invitation, passphrase, vault_root).await
+}
+
+/// connect_in + 연결 결과 로컬 기록(설정 화면·저장 파이프라인용).
+pub async fn connect_in_recorded(
+    env: &ConnectEnv,
+    invitation: &str,
+    passphrase: &str,
+    vault_root: &Path,
+) -> Result<ConnectOutcome, ConnectError> {
+    let (out, owner) = connect_in_owner(env, invitation, passphrase, vault_root).await?;
     let state = crate::state::AppState {
         connected_repo: Some(match &out {
             ConnectOutcome::AdminInitialized { repo, .. } => repo.clone(),
             ConnectOutcome::MemberConnected { repo, .. } => repo.clone(),
         }),
+        owner: Some(owner),
         is_admin: matches!(out, ConnectOutcome::AdminInitialized { .. }),
     };
     // 상태 기록 실패는 연결 실패가 아니다 — 결과는 유지
-    let _ = crate::state::save(&app_data, &state);
+    let _ = crate::state::save(vault_root, &state);
     Ok(out)
 }
 
@@ -83,6 +93,15 @@ pub async fn connect_in(
     passphrase: &str,
     vault_root: &Path,
 ) -> Result<ConnectOutcome, ConnectError> {
+    connect_in_owner(env, invitation, passphrase, vault_root).await.map(|(out, _)| out)
+}
+
+async fn connect_in_owner(
+    env: &ConnectEnv,
+    invitation: &str,
+    passphrase: &str,
+    vault_root: &Path,
+) -> Result<(ConnectOutcome, String), ConnectError> {
     // 1) 디코드 (S4 코덱)
     let payload = invite::decode(invitation, passphrase)?;
 
@@ -110,10 +129,13 @@ pub async fn connect_in(
             } else {
                 git_layer::clone_vault(&url, &payload.ghp, &vault_path)?;
             }
-            Ok(ConnectOutcome::MemberConnected {
-                repo: payload.repo,
-                vault_path,
-            })
+            Ok((
+                ConnectOutcome::MemberConnected {
+                    repo: payload.repo,
+                    vault_path,
+                },
+                user.login,
+            ))
         }
         RepoOutcome::Created => {
             // 방금 만든 빈 저장소 → 관리자 초기화 + 최초 푸시
@@ -121,10 +143,13 @@ pub async fn connect_in(
                 .map_err(|e| ConnectError::VaultPath(e.to_string()))?;
             let repo = git2_init(&vault_path)?;
             git_layer::init_and_push_first(&repo, &url, &payload.ghp, &payload.display)?;
-            Ok(ConnectOutcome::AdminInitialized {
-                repo: payload.repo,
-                vault_path,
-            })
+            Ok((
+                ConnectOutcome::AdminInitialized {
+                    repo: payload.repo,
+                    vault_path,
+                },
+                user.login,
+            ))
         }
     }
 }

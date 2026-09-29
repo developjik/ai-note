@@ -113,6 +113,110 @@ impl GithubService {
             other => Err(GithubError::Other(format!("저장소를 준비하지 못했어요 (code {other})"))),
         }
     }
+
+    /// 변경 세트 PR 생성(M2 — cs/<id> → main). 반환 = PR 번호.
+    /// 승인 기록은 앱 DB가 소유(단일 신원이라 GitHub 네이티브 리뷰 불가 — D0 §2).
+    pub async fn create_pr(
+        &self,
+        owner_repo: &str,
+        head: &str,
+        base: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<u64, GithubError> {
+        #[derive(Serialize)]
+        struct CreatePrBody<'a> {
+            title: &'a str,
+            head: &'a str,
+            base: &'a str,
+            body: &'a str,
+        }
+        let resp = self
+            .client
+            ._post(
+                &format!("/repos/{owner_repo}/pulls"),
+                Some(&CreatePrBody { title, head, base, body }),
+            )
+            .await
+            .map_err(github_err)?;
+        let status = resp.status().as_u16();
+        let bytes = http_body_util::BodyExt::collect(resp.into_body())
+            .await
+            .map_err(|e| GithubError::Other(format!("응답 수신 실패: {e}")))?
+            .to_bytes();
+        match status {
+            200..=201 => {
+                let body: serde_json::Value = serde_json::from_slice(&bytes)
+                    .map_err(|e| GithubError::Other(e.to_string()))?;
+                body.get("number")
+                    .and_then(|v| v.as_u64())
+                    .ok_or_else(|| GithubError::Other("반영 요청 번호를 받지 못했어요".into()))
+            }
+            401 | 403 | 404 => Err(GithubError::InsufficientScope),
+            422 => Err(GithubError::Other(
+                "이미 같은 변경에 대한 검토 요청이 있어요".into(),
+            )),
+            other => Err(GithubError::Other(format!(
+                "검토 요청을 만들지 못했어요 (code {other})"
+            ))),
+        }
+    }
+
+    /// PR 반영(머지 — 원자성 보장, D0 §2 '반영'). 성공 = Merged.
+    /// 405/409 = 이미 반영됨(동시 승인 레이스 — F32 '이미 반영됨' 안내).
+    pub async fn merge_pr(&self, owner_repo: &str, number: u64) -> Result<MergeOutcome, GithubError> {
+        #[derive(Serialize)]
+        struct MergeBody<'a> {
+            merge_method: &'a str,
+        }
+        let resp = self
+            .client
+            ._put(
+                &format!("/repos/{owner_repo}/pulls/{number}/merge"),
+                Some(&MergeBody { merge_method: "merge" }),
+            )
+            .await
+            .map_err(github_err)?;
+        match resp.status().as_u16() {
+            200 => Ok(MergeOutcome::Merged),
+            405 | 409 => Ok(MergeOutcome::AlreadyMerged),
+            401 | 403 | 404 => Err(GithubError::InsufficientScope),
+            other => Err(GithubError::Other(format!(
+                "변경을 반영하지 못했어요 (code {other})"
+            ))),
+        }
+    }
+
+    /// 원격 main 최신 해시(REST 브랜치 조회 — base 낡음 판정).
+    pub async fn default_branch_head(&self, owner_repo: &str) -> Result<Option<String>, GithubError> {
+        let resp = self
+            .client
+            ._get(&format!("/repos/{owner_repo}/branches/main"))
+            .await
+            .map_err(github_err)?;
+        if resp.status().as_u16() == 404 {
+            return Ok(None);
+        }
+        let bytes = http_body_util::BodyExt::collect(resp.into_body())
+            .await
+            .map_err(|e| GithubError::Other(format!("응답 수신 실패: {e}")))?
+            .to_bytes();
+        let body: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|e| GithubError::Other(e.to_string()))?;
+        Ok(body
+            .pointer("/commit/sha")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()))
+    }
+}
+
+/// PR 반영 결과 — F32 판정 재료.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MergeOutcome {
+    /// 이번 호출로 반영됨(첫 승인).
+    Merged,
+    /// 이미 반영되어 있음(동시 승인 레이스 — '이미 반영됨' 안내).
+    AlreadyMerged,
 }
 
 /// octocrab 오류 → 친화 분류(401/403/404 = 권한 문제 안내).

@@ -11,6 +11,12 @@ export const ui = {
   workspace: {
     newDocument: "새 문서",
     searchPlaceholder: "문서 찾기 — 제목이나 내용으로",
+    pickPrompt: "왼쪽에서 문서를 선택해 주세요",
+    previewMode: "미리보기",
+    editMode: "편집하기",
+    save: "저장",
+    saving: "저장 중…",
+    saved: "검토에 보냈어요",
   },
   review: { title: "검토함", approve: "반영하기", reject: "도로 돌리기" },
   history: { title: "지난 기록", applied: "반영됨", rejected: "도로 돌림" },

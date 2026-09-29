@@ -9,7 +9,13 @@ function invokeFactory(): Invoke | null {
   return internals ? internals.invoke.bind(internals) : null;
 }
 
-export function installBridge(windowObj: Window & { __aiNoteBridge?: unknown; __aiNoteSettings?: unknown }) {
+export function installBridge(
+  windowObj: Window & {
+    __aiNoteBridge?: unknown;
+    __aiNoteSettings?: unknown;
+    __aiNoteWorkspace?: unknown;
+  }
+) {
   const invoke = invokeFactory();
   if (!invoke) return;
   const typed = invoke as <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
@@ -20,6 +26,13 @@ export function installBridge(windowObj: Window & { __aiNoteBridge?: unknown; __
     subscriptionGuide: () => typed("subscription_guide"),
     connectInvitation: (invitation: string, passphrase: string) =>
       typed("connect_invitation", { invitation, passphrase }),
+  };
+  windowObj.__aiNoteWorkspace = {
+    listDir: (dir: string) => typed("workspace_list", { dir }),
+    readFile: (path: string) => typed("workspace_read", { path }),
+    searchVault: (query: string) => typed("workspace_search", { query }),
+    saveDocument: (path: string, content: string) =>
+      typed("workspace_save", { path, content }),
   };
   windowObj.__aiNoteSettings = {
     accountDisplay: () => typed("account_display"),

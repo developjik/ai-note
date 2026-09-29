@@ -44,6 +44,155 @@ fn app_data(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
         .map_err(|e| format!("노트 보관함 위치를 정하지 못했어요: {e}"))
 }
 
+// ── M2: 워크스페이스(읽기·검색·저장→변경 세트) ────────────────────
+
+fn open_vault(app: &tauri::AppHandle) -> Result<git2::Repository, String> {
+    let dir = app_data(app)?;
+    let state = ai_note_core::state::load(&dir);
+    let repo = state
+        .connected_repo
+        .ok_or_else(|| "팀 노트에 먼저 연결해 주세요".to_string())?;
+    git2::Repository::open(dir.join(&repo)).map_err(|e| format!("노트 보관함을 열지 못했어요: {e}"))
+}
+
+fn github_from_custody(app: &tauri::AppHandle) -> Result<(ai_note_core::github::GithubService, String, String), String> {
+    // (서비스, owner/repo, pat) — pat는 즉시 소비후기 내 콜백에서만 사용
+    let dir = app_data(app)?;
+    let state = ai_note_core::state::load(&dir);
+    let repo = state
+        .connected_repo
+        .ok_or_else(|| "팀 노트에 먼저 연결해 주세요".to_string())?;
+    let owner = state
+        .owner
+        .ok_or_else(|| "계정 정보가 없어요. 다시 연결해 주세요".to_string())?;
+    let pat = ai_note_core::token_custody::load_pat().map_err(|e| e.to_string())?;
+    let gh = ai_note_core::github::GithubService::new(&pat)
+        .map_err(|e| e.to_string())?;
+    Ok((gh, format!("{owner}/{repo}"), pat))
+}
+
+#[tauri::command]
+fn workspace_list(app: tauri::AppHandle, dir: String) -> Result<Vec<ai_note_core::vault::TreeEntry>, String> {
+    let vault = open_vault(&app)?;
+    ai_note_core::vault::list_dir(&vault, &dir)
+}
+
+#[tauri::command]
+fn workspace_read(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    let vault = open_vault(&app)?;
+    let bytes = ai_note_core::vault::read_file(&vault, &path)?;
+    Ok(String::from_utf8_lossy(&bytes).to_string())
+}
+
+#[tauri::command]
+fn workspace_search(app: tauri::AppHandle, query: String) -> Result<Vec<ai_note_core::search::SearchHit>, String> {
+    let vault = open_vault(&app)?;
+    let index = ai_note_core::search::build_index(&vault)?;
+    index.search(&query, 20)
+}
+
+#[derive(serde::Serialize)]
+pub struct SaveResult {
+    pub pr_number: i64,
+    pub summary: String,
+}
+
+#[tauri::command]
+async fn workspace_save(
+    app: tauri::AppHandle,
+    path: String,
+    content: String,
+) -> Result<SaveResult, String> {
+    // (gh, owner_repo, pat) — 자격·원격 주소(동기)
+    let (gh, owner_repo, pat) = {
+        let app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || github_from_custody(&app))
+            .await
+            .map_err(|e| e.to_string())?
+    }?;
+    let owner_repo = owner_repo.clone(); // 단계 1 클로저로 이동됨
+
+    // 단계 1(동기·git): cs 구성 + 무전환 커밋 + 원격 반영 — Repository는
+    // 이 블록 안에서만 삶(S2 !Send, await 경계 통과 금지).
+    let owner_repo_inner = owner_repo.clone();
+    let (cs, _store_dir) = {
+        let app2 = app.clone();
+        let path = path.clone();
+        let content = content.clone();
+        let owner_repo = owner_repo_inner;
+        tauri::async_runtime::spawn_blocking(move || -> Result<(ai_note_core::changeset::Changeset, std::path::PathBuf), String> {
+            let vault = open_vault(&app2)?;
+            let dir = app_data(&app2)?;
+            let author = ai_note_core::token_custody::load_display().map_err(|e| e.to_string())?;
+            let remote_url = remote_url_of(&vault, &owner_repo);
+
+            let base = vault
+                .find_reference("refs/heads/main")
+                .and_then(|r| r.peel_to_commit())
+                .map_err(|e| format!("노트 기준점을 찾지 못했어요: {e}"))?
+                .id()
+                .to_string();
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let files = vec![ai_note_core::changeset::CsFile {
+                path,
+                content: Some(content),
+            }];
+            let summary = ai_note_core::changeset::heuristic_summary(&files);
+            let mut cs = ai_note_core::changeset::Changeset {
+                id: format!("{now}-{author}"),
+                author_display: author,
+                summary,
+                base_commit: base,
+                files,
+                origin: ai_note_core::changeset::CsOrigin::Edit,
+                state: ai_note_core::changeset::CsState::Draft,
+            };
+            ai_note_core::changeset::submit_prepare(&vault, &remote_url, &pat, &mut cs)
+                .map_err(|e| e.to_string())?;
+            Ok((cs, dir))
+            // owner_repo는 이 클로저로 이동됨 — 이후 단계는 인자로 전달
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }?;
+
+    // 단계 2(비동기·REST): PR 생성 — Repository 없음
+    let pr_number = ai_note_core::changeset::submit_pr(&gh, &owner_repo, &cs)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // 단계 3(동기·영속)
+    let summary = cs.summary.clone();
+    let cs_id = cs.id.clone();
+    {
+        let app3 = app.clone();
+        tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+            let dir = app_data(&app3)?;
+            let store = ai_note_core::state::ChangesetStore::open(&dir.join("state.db"))
+                .map_err(|e| e.to_string())?;
+            ai_note_core::changeset::submit_persist(&store, &cs, pr_number)
+                .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+    }
+    Ok(SaveResult {
+        pr_number: pr_number as i64,
+        summary: format!("{summary} (cs/{cs_id})"),
+    })
+}
+
+fn remote_url_of(vault: &git2::Repository, owner_repo: &str) -> String {
+    vault
+        .find_remote("origin")
+        .ok()
+        .and_then(|r| r.url().map(|u| u.to_string()))
+        .unwrap_or_else(|| format!("https://github.com/{owner_repo}.git"))
+}
+
 #[tauri::command]
 fn account_display() -> Result<String, String> {
     ai_note_core::token_custody::load_display()
@@ -128,6 +277,10 @@ pub fn run() {
             claude_manual_steps,
             subscription_state,
             subscription_guide,
+            workspace_list,
+            workspace_read,
+            workspace_search,
+            workspace_save,
             account_display,
             connected_repo,
             disconnect_account,
