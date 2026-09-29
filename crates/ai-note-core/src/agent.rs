@@ -327,6 +327,13 @@ mod tests {
         // 플래그 없는 인자 목록은 기동 거부
         let bare = vec!["--print".to_string()];
         assert!(enforce_l1_gate(&bare).is_err());
+        // 우회 값(bypassPermissions)로는 쌍이 아니어서 거부 — §3의4 완화
+        // 계층의 자동 단언(§10.3(b) 자동 부분; 실 보안 도구 시도는 수동 프로토콜)
+        let bypass = vec![
+            "--permission-mode".to_string(),
+            "bypassPermissions".to_string(),
+        ];
+        assert!(enforce_l1_gate(&bypass).is_err(), "우회 권한 값 거부");
     }
 }
 
@@ -349,12 +356,16 @@ pub fn claude_args(prompt: &str) -> Vec<String> {
     ]
 }
 
-/// L1 게이트 검사 — 인자 목록에 권한 플래그가 없으면 Err(기동 거부).
+/// L1 게이트 검사 — 권한 플래그가 **허용 값과 정확한 쌍**으로 있어야
+/// 통과(플래그 존재만 보면 bypassPermissions 같은 우회 값이 새어 들어간다).
 pub fn enforce_l1_gate(args: &[String]) -> Result<(), String> {
-    if args.iter().any(|a| a == L1_PERMISSION_FLAG) {
+    let pair_ok = args
+        .windows(2)
+        .any(|w| w == [L1_PERMISSION_FLAG, L1_PERMISSION_VALUE]);
+    if pair_ok {
         Ok(())
     } else {
-        Err("AI 도우미를 안전 모드로 시작하지 못했어요 (권한 제한 플래그 누락)".into())
+        Err("AI 도우미를 안전 모드로 시작하지 못했어요 (권한 제한 플래그 누락 또는 값 오류)".into())
     }
 }
 
