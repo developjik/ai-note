@@ -1,0 +1,21 @@
+[package]
+name = "ai-note-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AI Note 데스크톱 앱 Rust 코어 — 볼트·git·에이전트·리뷰·초대장 모듈"
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+# invite 코덱 (S4)
+aes-gcm = "0.10"
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+sha2 = "0.10"
+base64 = "0.22"
+rand = "0.8"
+zeroize = "1"

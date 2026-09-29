@@ -1,0 +1,11 @@
+[package]
+name = "spike-tantivy-ko"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "S3 스파이크 — Tantivy 한국어 바이그램 토크나이저 검색 품질·인덱스 크기 측정"
+
+[dependencies]
+tantivy = "0.22"
+anyhow.workspace = true
+tempfile = "3"

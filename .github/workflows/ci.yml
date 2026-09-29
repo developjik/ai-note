@@ -1,0 +1,46 @@
+name: CI
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 코어·스파이크 테스트
+        run: cargo test --workspace --exclude ai-note-desktop
+      - name: Tauri 셸 체크 (macOS만 — Windows 번들 의존 체크는 M1)
+        if: matrix.os == 'macos-latest'
+        run: cargo check -p ai-note-desktop
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -C apps/desktop typecheck
+      - run: pnpm -C apps/desktop test
+
+  vocabulary-audit:
+    # A1/R8 — 사용자 표시 문자열 git 어휘 0건 단언 (한·영, Rust+TS 전체)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 금지 어휘 스캔 (문자열 리터럴)
+        run: |
+          python3 .github/scripts/vocab_audit.py

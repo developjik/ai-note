@@ -1,0 +1,6 @@
+target/
+node_modules/
+dist/
+.gjc/
+.DS_Store
+pnpm-lock.yaml.bak
