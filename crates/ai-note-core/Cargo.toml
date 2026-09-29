@@ -9,11 +9,15 @@ description = "AI Note 데스크톱 앱 Rust 코어 — 볼트·git·에이전�
 test-vectors = []
 
 [dependencies]
+hex = "0.4"
 anyhow.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+
+# git 계층 (M1 — S2 증명 기반)
+git2 = "0.20"
 
 # github REST (M1)
 octocrab = "0.44"
@@ -33,4 +37,5 @@ rand = "0.8"
 zeroize = "1"
 
 [dev-dependencies]
+tempfile = "3"
 wiremock = "0.6"

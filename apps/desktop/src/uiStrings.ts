@@ -14,10 +14,36 @@ export const ui = {
   },
   review: { title: "검토함", approve: "반영하기", reject: "도로 돌리기" },
   history: { title: "지난 기록", applied: "반영됨", rejected: "도로 돌림" },
+  settings: {
+    title: "설정",
+    accountLabel: "내 계정",
+    vaultLabel: "팀 노트 저장소",
+    versionLabel: "앱 버전",
+    disconnect: "연결 끊기",
+    disconnectHelp: "이 기기에서 계정 연결을 지워요. 팀 노트는 저장소에 그대로 남아요.",
+    disconnected: "연결 없음",
+  },
   onboard: {
     title: "시작하기",
     claudeInstall: "AI 도우미 깔기",
     invite: "초대장 붙여넣기",
+    unsignedNotice:
+      "처음 실행할 때 운영 체제가 '확인되지 않은 프로그램' 경고를 보여줄 수 있어요. 정상이며, OS별 안내는 설정 → 설치 안내에서 다시 볼 수 있어요.",
+    inviteHelp:
+      "팀 관리자에게 받은 초대장 문자열을 그대로 붙여넣어 주세요. 초대장과 함께 알려준 암호도 필요해요.",
+    invitePlaceholder: "AINV로 시작하는 초대장 문자열을 붙여넣어 주세요",
+    passphrasePlaceholder: "초대장 암호",
+    inviteNext: "다음 단계로",
+    claudeCheck: "AI 도우미(claude) 설치를 확인하고 있어요.",
+    claudeChecking: "확인 중… 잠시만 기다려 주세요",
+    subscriptionChecking: "Claude 구독 로그인을 확인하고 있어요…",
+    subscriptionGuideTitle:
+      "AI 도우미를 쓰려면 Claude 구독 로그인이 필요해요. 아래 단계를 따라 주세요.",
+    subscriptionRecheck: "다시 확인",
+    connectHelp: "모든 준비가 끝났어요. 팀 노트 저장소에 연결할게요.",
+    connectNow: "연결하기",
+    connecting: "연결 중…",
+    doneHelp: "왼쪽 화면에서 바로 노트 작성을 시작할 수 있어요.",
   },
 } as const;
 

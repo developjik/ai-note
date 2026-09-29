@@ -242,7 +242,7 @@ fn force_checkout_tree(repo: &Repository, tree: &git2::Tree) -> Result<()> {
     Ok(())
 }
 
-fn checkout_branch<'r>(repo: &'r Repository, branch: &git2::Branch) -> Result<()> {
+fn checkout_branch(repo: &Repository, branch: &git2::Branch) -> Result<()> {
     let refname = branch.get().name().context("브랜치명 없음")?.to_string();
     let obj = repo.revparse_single(&refname)?;
     let tree = obj.peel_to_commit()?.tree()?;

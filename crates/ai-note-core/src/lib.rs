@@ -21,6 +21,9 @@
 
 pub mod ui_strings;
 pub mod invite;
+pub mod agent_install;
+pub mod onboarding;
+pub mod subscription;
 
 pub mod vault;
 pub mod git_layer;

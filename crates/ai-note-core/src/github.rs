@@ -46,8 +46,18 @@ struct CreateRepoBody {
 impl GithubService {
     /// ghp로 서비스를 만든다. 토큰은 여기서만 쓰이고 디스크에 기록되지 않는다.
     pub fn new(pat: &str) -> Result<Self, GithubError> {
-        let client = Octocrab::builder()
-            .personal_token(pat.to_string())
+        Self::new_at(pat, None)
+    }
+
+    /// base URL 지정 버전(wiremock 통합 테스트용). None이면 github.com.
+    pub fn new_at(pat: &str, base_url: Option<&str>) -> Result<Self, GithubError> {
+        let mut builder = Octocrab::builder().personal_token(pat.to_string());
+        if let Some(base) = base_url {
+            builder = builder
+                .base_uri(base)
+                .map_err(|e| GithubError::Other(format!("잘못된 연결 주소: {e}")))?;
+        }
+        let client = builder
             .build()
             .map_err(|e| GithubError::Other(format!("클라이언트 생성 실패: {e}")))?;
         Ok(Self { client })
@@ -96,7 +106,7 @@ impl GithubService {
             .await;
         let resp = result.map_err(github_err)?;
         match resp.status().as_u16() {
-            200..=201 | 202 => Ok(RepoOutcome::Created),
+            200..=202 => Ok(RepoOutcome::Created),
             // 422: 이름 충돌 = 이미 존재 → 재사용(F26 재사용 정책)
             422 => Ok(RepoOutcome::Existing),
             401 | 403 | 404 => Err(GithubError::InsufficientScope),
@@ -194,15 +204,6 @@ mod tests {
 
     /// 목 서버를 가리키는 서비스(base URL 재지정)를 만든다.
     async fn service_at(server: &MockServer) -> GithubService {
-        let pat = "ghp_testtoken";
-        let svc = GithubService::new(pat).unwrap();
-        // octocrab의 base를 목 서버로 교체
-        let client = Octocrab::builder()
-            .personal_token(pat.to_string())
-            .base_uri(server.uri())
-            .expect("base uri")
-            .build()
-            .expect("client");
-        GithubService { client }
+        GithubService::new_at("ghp_testtoken", Some(&server.uri())).unwrap()
     }
 }

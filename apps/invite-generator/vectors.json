@@ -1,0 +1,20 @@
+[
+  {
+    "display": "김하나",
+    "ghp": "ghp_TestToken0001",
+    "invitation": "QUlOVgEFEh8sOUZTYG16h5QBCA8WHSQrMjlAR05VXGNqVQAAAMWQ5UTRZQ-kTU2esrsAeTOOtLl7DXHE5sX5UiW2evF_No3unjeifSifEjISgx2HWpKfhKwTRgGHThQc7ZRx50MsAQthpacV1HhAWnPAib1EwV_QhGA",
+    "nonce_hex": "05121f2c394653606d7a8794",
+    "passphrase": "팀-비밀번호-1",
+    "repo": "team-notes",
+    "salt_hex": "01080f161d242b323940474e555c636a"
+  },
+  {
+    "display": "박둘",
+    "ghp": "ghp_TestToken0002",
+    "invitation": "QUlOVgEWIzA9SldkcX6LmKUgJy41PENKUVhfZm10e4KJUgAAAJSb_LlTDtoMgb8EAe5PqRkkKk4hgibAyIgZMztMAUYYA2QY60b1P5h4z1oOlp7BnloyQKUwFdIl0KVNfr7lovvdSKlDMm4UydqSeEQgZpSf22A",
+    "nonce_hex": "1623303d4a5764717e8b98a5",
+    "passphrase": "team-secret-2",
+    "repo": "team-notes",
+    "salt_hex": "20272e353c434a51585f666d747b8289"
+  }
+]

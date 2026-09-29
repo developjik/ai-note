@@ -20,7 +20,42 @@ jobs:
       - name: Tauri 셸 체크 (macOS만 — Windows 번들 의존 체크는 M1)
         if: matrix.os == 'macos-latest'
         run: cargo check -p ai-note-desktop
-
+  unsigned-bundle:
+    # M1 — 무서명 NSIS/dmg 파이프라인(Q1 확정: 서명·공증 없음).
+    # 산출물 아티팩트 업로드 — Releases 게시·다운로드 페이지는 M5.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: pnpm install --frozen-lockfile
+      - name: 프런트엔드 빌드
+        run: pnpm -C apps/desktop build
+      - name: 무서명 번들 빌드 (macOS=dmg / Windows=NSIS)
+        uses: tauri-apps/tauri-action@v0
+        # 무서명(Q1): 서명 시크릿 없음 — 번들 생성만 수행.
+        # macOS 네이티브 arch dmg(M5에서 유니버설 타깃 검토).
+        with:
+          projectPath: apps/desktop
+      - name: 설치 파일 아티팩트 업로드
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-installer-${{ matrix.os }}
+          path: |
+            apps/desktop/src-tauri/target/release/bundle/**/*.dmg
+            apps/desktop/src-tauri/target/release/bundle/**/*.exe
+          if-no-files-found: error
   frontend:
     runs-on: ubuntu-latest
     steps:
