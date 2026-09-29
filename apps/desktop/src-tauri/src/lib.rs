@@ -96,7 +96,9 @@ fn workspace_read(app: tauri::AppHandle, path: String) -> Result<String, String>
 #[tauri::command]
 fn workspace_search(app: tauri::AppHandle, query: String) -> Result<Vec<ai_note_core::search::SearchHit>, String> {
     let vault = open_vault(&app)?;
-    let index = ai_note_core::search::build_index(&vault)?;
+    // 증분 색인(M5) — 앱 데이터 디렉터리에 디스크 색인 재사용, blob 해시로 스킵
+    let dir = app_data(&app)?;
+    let (index, _stats) = ai_note_core::search::build_index_incremental(&vault, &dir.join("search-index"))?;
     index.search(&query, 20)
 }
 

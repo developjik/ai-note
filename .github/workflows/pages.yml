@@ -1,0 +1,40 @@
+name: Pages 배포 (초대장·다운로드 페이지)
+
+# M5 — 초대장 Pages 배포(스코프 안내 포함) + 다운로드 페이지(무서명 경고 안내).
+on:
+  push:
+    branches: [master]
+    paths:
+      - "apps/invite-generator/**"
+      - "apps/download-page/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 사이트 조립 — /invite(초대장), /(다운로드)
+        run: |
+          mkdir -p site/invite
+          cp apps/invite-generator/index.html apps/invite-generator/generator.js site/invite/
+          cp apps/download-page/index.html site/index.html
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4

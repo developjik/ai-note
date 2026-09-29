@@ -1,0 +1,85 @@
+name: 릴리스 게시 (무서명 v1 + minisign)
+
+# M5 — 태그(v*) 푸시 시 dmg/NSIS + checksums + minisign 서명 게시.
+# 서명 비밀키는 저장소 시크릿 MINISIGN_SECRET_KEY(앱 업데이터 검증용 —
+# 공개키는 apps/download-page/index.html 자리표시자를 교체해 게시).
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            args: "--target aarch64-apple-darwin"
+          - os: windows-latest
+            args: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "crates -> target\ncrates"
+      - name: 프런트 빌드
+        run: pnpm install --frozen-lockfile && pnpm -C apps/desktop build
+      - name: 번들(무서명 dmg/NSIS)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          # 무서명 v1(Q1) — 서명 시크릿 없음: 경고 우회는 다운로드 페이지 안내
+          APPLE_CERTIFICATE: ""
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "AI Note ${{ github.ref_name }}"
+          releaseBody: |
+            ## 설치 안내
+            처음 설치 시 운영 체제가 "확인되지 않은 개발자" 경고를 보여줄 수 있어요.
+            macOS: 시스템 설정 → 개인 정보 보호 및 보안 → 그래도 허용 (설치 때 1회)
+            Windows: 추가 정보 → 실행 (설치 때 1회)
+            자세한 안내와 진위 검증(공개키)은 다운로드 페이지를 참고해 주세요.
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}
+      # minisign checksums — 비밀키는 시크릿(없으면 건너뜀: 서명 없이 게시)
+      - name: checksums + minisign 서명
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -e
+          ls -la apps/desktop/src-tauri/target/release/bundle/dmg/ || true
+          python3 - <<'PY'
+          import hashlib, glob, os
+          lines = []
+          for pat in ["apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg",
+                      "apps/desktop/src-tauri/target/release/bundle/nsis/*.exe"]:
+              for f in glob.glob(pat):
+                  h = hashlib.sha256(open(f,'rb').read()).hexdigest()
+                  lines.append(f"{h}  {os.path.basename(f)}")
+          open("checksums.txt","w").write("\n".join(lines)+"\n")
+          print(open("checksums.txt").read())
+          PY
+          if [ -n "${{ secrets.MINISIGN_SECRET_KEY }}" ]; then
+            printf '%s' "${{ secrets.MINISIGN_SECRET_KEY }}" > /tmp/ms.key
+            brew install minisign || true
+            minisign -S -s /tmp/ms.key -m checksums.txt -x checksums.txt.minisig
+            rm /tmp/ms.key
+            gh release upload "${{ github.ref_name }}" checksums.txt checksums.txt.minisig --clobber
+          else
+            echo "MINISIGN_SECRET_KEY 미설정 — checksums만 게시(서명 없음)"
+            gh release upload "${{ github.ref_name }}" checksums.txt --clobber
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

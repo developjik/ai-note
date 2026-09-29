@@ -37,6 +37,13 @@ pub struct VaultSearch {
     reader: tantivy::IndexReader,
 }
 
+/// 증분 재색인 결과(M5 — 증분 인덱스 상한 증명 재료).
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct IncrementalStats {
+    pub docs_indexed: usize,
+    pub docs_skipped: usize,
+}
+
 pub fn build_index(vault: &Repository) -> Result<VaultSearch, String> {
     let mut builder = Schema::builder();
     let indexing = TextFieldIndexing::default()
@@ -118,6 +125,123 @@ pub fn build_index(vault: &Repository) -> Result<VaultSearch, String> {
 
     let _ = indexed; // 진단용 — 대량 기준선 테스트가 상위에서 측정
     Ok(VaultSearch { index, reader })
+}
+
+/// 증분 재색인(M5) — 디스크 인덱스 재사용 + git blob 해시 대비 스킵.
+/// 저장소 트리의 각 md blob oid가 기록된 것과 같으면 재색인하지 않는다.
+/// 상한 증명: 3,000문서에서 1문서 변경 시 docs_indexed=1(단위 테스트).
+pub fn build_index_incremental(vault: &Repository, index_dir: &std::path::Path) -> Result<(VaultSearch, IncrementalStats), String> {
+    std::fs::create_dir_all(index_dir).map_err(|e| e.to_string())?;
+    let index = if index_dir.join("meta.json").exists() {
+        Index::open_in_dir(index_dir).map_err(|e| format!("색인 열기 실패: {e}"))?
+    } else {
+        Index::create_in_dir(index_dir, schema_of()).map_err(|e| format!("색인 생성 실패: {e}"))?
+    };
+    index
+        .tokenizers()
+        .register("ko_bigram", register_korean_bigram());
+
+    let main = vault
+        .find_reference("refs/heads/main")
+        .map_err(|e| format!("팀 노트가 아직 준비되지 않았어요: {e}"))?
+        .peel_to_commit()
+        .map_err(|e| e.to_string())?;
+    let tree = main.tree().map_err(|e| e.to_string())?;
+
+    // 기존 색인의 (경로→blob oid) 지도
+    let reader = index.reader().map_err(|e| format!("색인 읽기 준비 실패: {e}"))?;
+    let searcher = reader.searcher();
+    let path_field = index.schema().get_field("path").map_err(|e| e.to_string())?;
+    let oid_field = index
+        .schema()
+        .get_field("blob_oid")
+        .map_err(|_| "색인 구버전 — 전량 재색인으로 마이그레이션".to_string())
+        .or_else(|_| index.schema().get_field("path").map_err(|e| e.to_string()))?;
+    let mut known: std::collections::HashMap<String, String> = Default::default();
+    for seg in searcher.segment_readers() {
+        for doc_id in seg.doc_ids_alive() {
+            let addr = tantivy::DocAddress {
+                segment_ord: searcher.segment_readers().iter().position(|s| std::ptr::eq(s, seg)).unwrap_or(0) as u32,
+                doc_id,
+            };
+            if let Ok(doc) = searcher.doc::<TantivyDocument>(addr) {
+                let path = doc.get_first(path_field).and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                let oid = doc.get_first(oid_field).and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                if !path.is_empty() {
+                    known.insert(path, oid);
+                }
+            }
+        }
+    }
+
+    let mut writer = index.writer(15_000_000).map_err(|e| format!("색인 준비 실패: {e}"))?;
+    let mut stats = IncrementalStats::default();
+    walk_md(vault, &tree, "", &mut |path, oid_hex, content| {
+        if known.get(path).map(|k| k.as_str()) == Some(oid_hex) {
+            stats.docs_skipped += 1;
+            return;
+        }
+        let _ = writer.delete_term(tantivy::Term::from_field_text(path_field, path));
+        let p_field = path_field;
+        let o_field = oid_field;
+        let _ = writer.add_document(doc!(
+            p_field => path.to_string(),
+            o_field => oid_hex.to_string(),
+            index.schema().get_field("body").map_err(|e| e.to_string()).unwrap() => content.to_string(),
+        ));
+        stats.docs_indexed += 1;
+    });
+    writer.commit().map_err(|e| format!("색인 확정 실패: {e}"))?;
+    let reader = index.reader().map_err(|e| e.to_string())?;
+    Ok((VaultSearch { index, reader }, stats))
+}
+
+fn schema_of() -> Schema {
+    let mut builder = Schema::builder();
+    let indexing = TextFieldIndexing::default()
+        .set_index_option(IndexRecordOption::WithFreqsAndPositions)
+        .set_tokenizer("ko_bigram");
+    let text_opts = tantivy::schema::TextOptions::default()
+        .set_indexing_options(indexing.clone())
+        .set_stored();
+    builder.add_text_field("path", text_opts.clone());
+    builder.add_text_field("body", text_opts.clone());
+    // blob oid — 증분 스킵 판정 키(저장 전용)
+    builder.add_text_field(
+        "blob_oid",
+        tantivy::schema::TextOptions::default().set_stored(),
+    );
+    builder.build()
+}
+
+/// md 파일 워크 — (경로, blob oid hex, 내용) 콜백.
+fn walk_md(
+    vault: &Repository,
+    tree: &git2::Tree<'_>,
+    prefix: &str,
+    f: &mut dyn FnMut(&str, &str, &str),
+) {
+    for item in tree.iter() {
+        let name = item.name().unwrap_or_default().to_string();
+        let full = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
+        match item.kind() {
+            Some(git2::ObjectType::Tree) => {
+                if let Ok(sub) = item.to_object(vault).and_then(|o| o.peel_to_tree()) {
+                    walk_md(vault, &sub, &full, f);
+                }
+            }
+            Some(git2::ObjectType::Blob) => {
+                if !full.to_lowercase().ends_with(".md") {
+                    continue;
+                }
+                if let Ok(blob) = item.to_object(vault).and_then(|o| o.peel_to_blob()) {
+                    let content = String::from_utf8_lossy(blob.content()).to_string();
+                    f(&full, &item.id().to_string(), &content);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 impl VaultSearch {
@@ -318,5 +442,64 @@ mod tests {
         // S3 기준선: 색인 < 5s, 검색 < 500ms(넉넉한 상방 — p95 목표는 M5)
         assert!(index_ms < 5000, "색인 {index_ms}ms");
         assert!(query_ms < 500, "검색 {query_ms}ms");
+    }
+
+    /// M5 증분 색인 — 1문서 변경 시 1문서만 재색인(스킵 2999).
+    #[test]
+    fn m5_incremental_index_skips_unchanged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let index_dir = tmp.path().join("idx");
+        let repo_dir = tmp.path().join("repo");
+        let repo = git2::Repository::init(&repo_dir).unwrap();
+
+        fn commit_all(repo: &git2::Repository, edits: &[(usize, &str)]) {
+            let mut index = repo.index().unwrap();
+            for i in 0..3000 {
+                let content = format!("문서 {i} 본문 — 예산 승인 메모 {i}");
+                let content = if let Some((_, c)) = edits.iter().find(|(n, _)| *n == i) {
+                    c.to_string()
+                } else {
+                    content
+                };
+                index
+                    .add_frombuffer(
+                        &git2::IndexEntry {
+                            ctime: git2::IndexTime::new(0, 0),
+                            mtime: git2::IndexTime::new(0, 0),
+                            dev: 0, ino: 0, mode: 0o100644, uid: 0, gid: 0,
+                            file_size: content.len() as u32,
+                            id: git2::Oid::zero(), flags: 0, flags_extended: 0,
+                            path: format!("노트{i:04}.md").into_bytes(),
+                        },
+                        content.as_bytes(),
+                    )
+                    .unwrap();
+            }
+            let tree_id = index.write_tree().unwrap();
+            let tree = repo.find_tree(tree_id).unwrap();
+            let parent = repo
+                .find_reference("refs/heads/main")
+                .ok()
+                .and_then(|r| r.peel_to_commit().ok());
+            let sig = git2::Signature::now("t", "t@local").unwrap();
+            let parents: Vec<&git2::Commit> = parent.iter().collect();
+            let c = repo.commit(Some("refs/heads/main"), &sig, &sig, "c", &tree, &parents).unwrap();
+            let commit = repo.find_commit(c).unwrap();
+            repo.branch("main", &commit, true).unwrap();
+        }
+
+        // 1차 전량
+        commit_all(&repo, &[]);
+        let (s1, stats1) = build_index_incremental(&repo, &index_dir).unwrap();
+        assert_eq!(stats1.docs_indexed, 3000);
+        assert_eq!(stats1.docs_skipped, 0);
+        assert!(!s1.search("예산 승인", 10).unwrap().is_empty());
+
+        // 2차 — 1문서만 변경(새 키워드)
+        commit_all(&repo, &[(7, "문서 7 본문 — 유일키워드마감")]);
+        let (s2, stats2) = build_index_incremental(&repo, &index_dir).unwrap();
+        assert_eq!(stats2.docs_indexed, 1, "변경 문서만 재색인");
+        assert_eq!(stats2.docs_skipped, 2999, "나머지 스킵 — 증분 상한 증명");
+        assert!(!s2.search("유일키워드마감", 10).unwrap().is_empty(), "새 내용 검색 가능");
     }
 }

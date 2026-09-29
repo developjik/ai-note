@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Note — 설치 파일 받기</title>
+  <style>
+    body { font-family: -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+           max-width: 720px; margin: 40px auto; padding: 0 20px; color: #1a1a2e; }
+    h1 { font-size: 24px; }
+    .os { border: 1px solid #ccd; border-radius: 10px; padding: 16px 20px; margin: 18px 0; }
+    .os h2 { font-size: 18px; margin-top: 0; }
+    .warn { background: #fff6e0; border: 1px solid #edc; border-radius: 10px;
+            padding: 12px 16px; font-size: 14px; }
+    ol { line-height: 1.8; }
+    code { background: #eef; padding: 2px 6px; border-radius: 4px; }
+    .key { font-family: ui-monospace, monospace; font-size: 12px; word-break: break-all;
+           background: #f4f4f8; padding: 10px; border-radius: 8px; }
+    a.btn { display: inline-block; padding: 10px 18px; border-radius: 8px;
+            background: #3556c9; color: #fff; text-decoration: none; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>AI Note 설치 파일 받기</h1>
+
+  <div class="warn">
+    <strong>설치 안내(중요)</strong> — AI Note v1은 개인·팀 내부용으로 배포되어
+    상점 서명이 없습니다. 그래서 처음 설치할 때 운영 체제가
+    <b>"확인되지 않은 개발자"</b> 경고를 보여줄 수 있어요. 정상이며,
+    아래 OS별 안내대로 한 번만 허용해 주세요. 파일 진위는 아래 공개키로
+    검증합니다(검증 방법 안내 참조).
+  </div>
+
+  <div class="os">
+    <h2>macOS</h2>
+    <ol>
+      <li>위 릴리스에서 <code>.dmg</code> 파일을 받아 실행해 주세요.</li>
+      <li>AI Note를 응용 프로그램 폴더로 끌어다 놓아 주세요.</li>
+      <li>처음 실행 시 "확인할 수 없음" 경고가 뜨면:
+        <b>시스템 설정 → 개인 정보 보호 및 보안</b>으로 가서
+        "그래도 허용"을 눌러 주세요. <b>이 단계는 설치 때 한 번만 필요해요.</b></li>
+      <li>업데이트는 앱 안내에서 새 설치 파일을 받아 같은 방법으로 덮어 설치해요.</li>
+    </ol>
+  </div>
+
+  <div class="os">
+    <h2>Windows</h2>
+    <ol>
+      <li>위 릴리스에서 <code>.exe</code> 설치 파일을 받아 실행해 주세요.</li>
+      <li>"Windows가 PC를 보호했습니다" 파란 창이 뜨면:
+        <b>추가 정보 → 실행</b>을 눌러 주세요. <b>설치 때 한 번만 필요해요.</b></li>
+      <li>설치 안내를 따라 마쳐 주세요.</li>
+    </ol>
+  </div>
+
+  <div class="os">
+    <h2>파일 진짜인지 확인하기(선택)</h2>
+    <p>모든 릴리스에는 <code>checksums.txt</code>와
+      <code>checksums.txt.minisig</code>가 함께 올라와요. minisign 도구로
+      아래 공개키로 검증할 수 있어요:</p>
+    <p class="key" id="pubkey">MINISIGN_PUBKEY_PLACEHOLDER</p>
+    <p><code>minisign -Vm checksums.txt -P (위 공개키)</code></p>
+  </div>
+
+  <div class="os">
+    <h2>팀 초대장 만들기(관리자용)</h2>
+    <p>새 팀원을 초대하려면 <a href="/invite/">초대장 만들기 페이지</a>를 사용해 주세요.</p>
+  </div>
+
+  <a class="btn" href="https://github.com/TEAM/REPO/releases/latest">최신 설치 파일 보러 가기</a>
+</body>
+</html>

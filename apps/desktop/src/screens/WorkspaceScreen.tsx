@@ -6,6 +6,7 @@ import { EditorView, keymap } from "@codemirror/view";
 import { markdown } from "@codemirror/lang-markdown";
 import { defaultKeymap } from "@codemirror/commands";
 import { renderMarkdown, byteOffsetToCharIndex } from "../workspace/preview";
+import { VirtualList } from "../workspace/VirtualList";
 import { ui } from "../uiStrings";
 
 export interface TreeEntryDto {
@@ -174,20 +175,21 @@ export function WorkspaceScreen({ bridge }: { bridge?: WorkspaceBridge }) {
             ))}
           </ul>
         )}
-        <ul data-testid="doc-tree">
-          {entries
-            .filter((e) => e.kind !== "Asset")
-            .map((e) => (
-              <li key={e.path}>
-                <button
-                  data-testid={`tree-${e.name}`}
-                  onClick={() => (e.kind === "Document" || e.kind === "ReadOnly") && openDoc(e.path)}
-                >
-                  {e.kind === "Folder" ? "📁" : "📄"} {e.name}
-                </button>
-              </li>
-            ))}
-        </ul>
+        <div data-testid="doc-tree">
+          <VirtualList
+            items={entries.filter((e) => e.kind !== "Asset")}
+            height={440}
+            renderItem={(e) => (
+              <button
+                data-testid={`tree-${e.name}`}
+                style={{ width: "100%", textAlign: "left" }}
+                onClick={() => (e.kind === "Document" || e.kind === "ReadOnly") && openDoc(e.path)}
+              >
+                {e.kind === "Folder" ? "📁" : "📄"} {e.name}
+              </button>
+            )}
+          />
+        </div>
       </aside>
       <section>
         {openPath === null ? (

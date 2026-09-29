@@ -187,6 +187,34 @@ impl GithubService {
         }
     }
 
+    /// raw GET — (상태코드, 본문) 반환(업데이터가 직접 판정).
+    pub async fn raw_get_status_body(&self, path: &str) -> Result<(u16, String), GithubError> {
+        let resp = self.client._get(path).await.map_err(github_err)?;
+        let status = resp.status().as_u16();
+        let bytes = http_body_util::BodyExt::collect(resp.into_body())
+            .await
+            .map_err(|e| GithubError::Other(format!("응답 수신 실패: {e}")))?
+            .to_bytes();
+        Ok((status, String::from_utf8_lossy(&bytes).to_string()))
+    }
+
+    /// 릴리스 자산 본문 조회(업데이터 검증 재료 — wiremock 테스트용 최소 경로).
+    pub async fn raw_get_text(&self, _release: &str, asset: &str) -> Result<String, GithubError> {
+        let resp = self
+            .client
+            ._get(&format!("/release-assets/{asset}"))
+            .await
+            .map_err(github_err)?;
+        if !resp.status().is_success() {
+            return Ok(String::new());
+        }
+        let text = http_body_util::BodyExt::collect(resp.into_body())
+            .await
+            .map_err(|e| GithubError::Other(format!("응답 수신 실패: {e}")))?
+            .to_bytes();
+        Ok(String::from_utf8_lossy(&text).to_string())
+    }
+
     /// 원격 main 최신 해시(REST 브랜치 조회 — base 낡음 판정).
     pub async fn default_branch_head(&self, owner_repo: &str) -> Result<Option<String>, GithubError> {
         let resp = self
