@@ -10,6 +10,8 @@ use tauri::Manager;
 /// 모든 git 조작 직렬화(D 단일 작성자 — S2 !Send 원칙의 런타임 보강).
 /// 코어가 함수별 &Repository를 받는 한 동시 호출이 같은 저장소를 물 수
 /// 있어 브리지 경계에서 잠근다.
+use ai_note_core::agent::AgentRunner;
+
 static GIT_OPS_LOCK: Mutex<()> = Mutex::new(());
 
 #[tauri::command]
@@ -218,6 +220,136 @@ fn remote_url_of(vault: &git2::Repository, owner_repo: &str) -> String {
         .unwrap_or_else(|| format!("https://github.com/{owner_repo}.git"))
 }
 
+// ── M3: 에이전트 슈퍼바이저 — 샌드박스 실행 → 변경 세트 → 검토 요청 ──
+
+#[derive(serde::Deserialize)]
+pub struct AgentTaskInput {
+    pub prompt: String,
+    pub target_doc: Option<String>,
+}
+
+#[tauri::command]
+async fn agent_run_task(
+    app: tauri::AppHandle,
+    task_input: AgentTaskInput,
+) -> Result<SaveResult, String> {
+    use tauri::Emitter;
+    let task_id = format!(
+        "{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    );
+    let _ = app.emit(
+        "agent-event",
+        serde_json::json!({ "type": "Started", "task_id": task_id, "prompt": task_input.prompt }),
+    );
+
+    // 자격·원격 준비
+    let (gh, owner_repo, pat) = {
+        let app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || github_from_custody(&app))
+            .await
+            .map_err(|e| e.to_string())?
+    }?;
+
+    // 샌드박스 실행(동기·격리 스레드) — L1/L2 강제, 작업사본 스냅숏 포함
+    let author = {
+        tauri::async_runtime::spawn_blocking(|| {
+            ai_note_core::token_custody::load_display().unwrap_or_default()
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    };
+    let target_doc = task_input.target_doc.clone();
+    // 대상 문서 원문(볼트에서 읽기 — 에이전트에게는 사본만 전달)
+    let snapshot_files = {
+        let app_snap = app.clone();
+        let target_doc = target_doc.clone();
+        tauri::async_runtime::spawn_blocking(move || -> Vec<(String, String)> {
+            let Ok(vault) = open_vault(&app_snap) else { return vec![] };
+            match target_doc {
+                Some(doc) => ai_note_core::vault::read_file(&vault, &doc)
+                    .ok()
+                    .map(|b| vec![(doc, String::from_utf8_lossy(&b).to_string())])
+                    .unwrap_or_default(),
+                None => vec![],
+            }
+        })
+        .await
+        .unwrap_or_default()
+    };
+    let task = ai_note_core::agent::AgentTask {
+        id: task_id.clone(),
+        prompt: task_input.prompt,
+        target_doc,
+        author_display: author,
+    };
+    let files = {
+        let task = task.clone();
+        let snapshot_files = snapshot_files.clone();
+        tauri::async_runtime::spawn_blocking(move || -> Result<Vec<ai_note_core::changeset::CsFile>, String> {
+            let scratch = std::env::temp_dir().join("ainote-agent");
+            std::fs::create_dir_all(&scratch).map_err(|e| e.to_string())?;
+            let mut sandbox = ai_note_core::agent::SandboxSpec::for_task(&scratch, &task.id);
+            sandbox.snapshot_files = snapshot_files;
+            std::fs::create_dir_all(&sandbox.workdir).map_err(|e| e.to_string())?;
+            let mut runner = ai_note_core::agent::ClaudeAdapter::new();
+            runner.run(&task, &sandbox).map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }?;
+    let _ = app.emit(
+        "agent-event",
+        serde_json::json!({ "type": "Produced", "task_id": task_id, "summary": ai_note_core::changeset::heuristic_summary(&files) }),
+    );
+
+    // 변경 세트 제출(파이프라인 재사용 — Repository !Send 세그먼트 분해)
+    let owner_repo_inner = owner_repo.clone();
+    let (cs, _app_data_dir) = {
+        let app2 = app.clone();
+        let task = task.clone();
+        let files = files.clone();
+        tauri::async_runtime::spawn_blocking(move || -> Result<(ai_note_core::changeset::Changeset, std::path::PathBuf), String> {
+            let _guard = GIT_OPS_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            let dir = app_data(&app2)?;
+            let vault = open_vault(&app2)?;
+            let remote_url = remote_url_of(&vault, &owner_repo_inner);
+            let base = vault
+                .find_reference("refs/heads/main")
+                .and_then(|r| r.peel_to_commit())
+                .map_err(|e| e.to_string())?
+                .id()
+                .to_string();
+            let mut cs = ai_note_core::agent::files_to_changeset(&task, files, &base);
+            ai_note_core::changeset::submit_prepare(&vault, &remote_url, &pat, &mut cs)
+                .map_err(|e| e.to_string())?;
+            Ok((cs, dir))
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }?;
+    let pr_number = ai_note_core::changeset::submit_pr(&gh, &owner_repo, &cs)
+        .await
+        .map_err(|e| e.to_string())?;
+    {
+        let app3 = app.clone();
+        let cs = cs.clone();
+        tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+            let dir = app_data(&app3)?;
+            let store = ai_note_core::state::ChangesetStore::open(&dir.join("state.db"))
+                .map_err(|e| e.to_string())?;
+            ai_note_core::changeset::submit_persist(&store, &cs, pr_number).map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+    }
+    let summary = cs.summary.clone();
+    Ok(SaveResult { pr_number: pr_number as i64, summary })
+}
+
 #[tauri::command]
 fn account_display() -> Result<String, String> {
     ai_note_core::token_custody::load_display()
@@ -302,6 +434,7 @@ pub fn run() {
             claude_manual_steps,
             subscription_state,
             subscription_guide,
+            agent_run_task,
             workspace_list,
             workspace_read,
             workspace_search,

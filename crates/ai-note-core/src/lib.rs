@@ -30,6 +30,7 @@ pub mod git_layer;
 pub mod github;
 pub mod changeset;
 pub mod agent;
+pub mod sandbox;
 pub mod review;
 pub mod search;
 pub mod state;
