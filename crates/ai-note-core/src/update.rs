@@ -109,14 +109,14 @@ pub async fn check_for_update(
             current: current_version.to_string(),
         };
     }
-    // 서명 검증 — 릴리스의 checksums.txt + checksums.txt.minisig 자산.
-    // M5 CI가 게시하며, 여기선 자산 내용 기반 검증(다운로드는 수동 단계).
+    // 서명 검증 — 릴리스 자산(checksums.txt + .minisig)을 실제 다운로드
+    // 경로에서 받아 검증(다운로드 페이지의 안내 파일과 동일 체인).
     let checksum = gh
-        .raw_get_text(&format!("/repos/{owner_repo}/releases/latest"), "checksums.txt")
+        .release_asset(owner_repo, &tag, "checksums.txt")
         .await
         .unwrap_or_default();
     let sig = gh
-        .raw_get_text(&format!("/repos/{owner_repo}/releases/latest"), "checksums.txt.minisig")
+        .release_asset(owner_repo, &tag, "checksums.txt.minisig")
         .await
         .unwrap_or_default();
     let verified = !checksum.is_empty() && verify_minisign(public_key, &checksum, &sig);

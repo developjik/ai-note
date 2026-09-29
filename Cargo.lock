@@ -693,6 +693,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dbg-delete"
+version = "0.0.0"
+dependencies = [
+ "ai-note-core",
+ "git2",
+ "tantivy",
+]
+
+[[package]]
 name = "dbus"
 version = "0.9.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"

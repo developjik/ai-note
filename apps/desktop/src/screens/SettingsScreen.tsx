@@ -3,11 +3,18 @@
 import { useEffect, useState } from "react";
 import { ui } from "../uiStrings";
 
+export interface UpdateInfo {
+  has_update: boolean;
+  notice: string;
+  download_url: string;
+}
+
 interface SettingsBridge {
   accountDisplay(): Promise<string>;
   connectedRepo(): Promise<string>;
   appVersion(): Promise<string>;
   disconnectAccount(): Promise<void>;
+  checkUpdate?(): Promise<UpdateInfo>;
 }
 
 declare global {
@@ -20,6 +27,15 @@ export function SettingsScreen({ bridge }: { bridge?: SettingsBridge }) {
   const [repo, setRepo] = useState("");
   const [version, setVersion] = useState("");
   const [disconnected, setDisconnected] = useState(false);
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+
+  useEffect(() => {
+    b?.checkUpdate?.().then(setUpdate).catch(() => setUpdate(null));
+  }, [b]);
+
+  useEffect(() => {
+    b?.checkUpdate?.().then(setUpdate).catch(() => setUpdate(null));
+  }, [b]);
 
   useEffect(() => {
     if (!b) return;
@@ -53,6 +69,22 @@ export function SettingsScreen({ bridge }: { bridge?: SettingsBridge }) {
         {ui.settings.disconnect}
       </button>
       <p>{ui.settings.disconnectHelp}</p>
+      {update && (
+        <section data-testid="update-section">
+          <h3>{ui.settings.updateTitle}</h3>
+          <p role="status" data-testid="update-notice">{update.notice}</p>
+          {update.has_update && update.download_url && (
+            <a
+              data-testid="update-download"
+              href={update.download_url}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {ui.settings.updateDownload}
+            </a>
+          )}
+        </section>
+      )}
     </section>
   );
 }

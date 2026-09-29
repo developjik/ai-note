@@ -95,6 +95,8 @@ fn workspace_read(app: tauri::AppHandle, path: String) -> Result<String, String>
 
 #[tauri::command]
 fn workspace_search(app: tauri::AppHandle, query: String) -> Result<Vec<ai_note_core::search::SearchHit>, String> {
+    // 색인 쓰기(증분 writer)는 tantivy IndexLock 단일 — 동시 호출 직렬화
+    let _guard = GIT_OPS_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let vault = open_vault(&app)?;
     // 증분 색인(M5) — 앱 데이터 디렉터리에 디스크 색인 재사용, blob 해시로 스킵
     let dir = app_data(&app)?;
@@ -352,6 +354,41 @@ async fn agent_run_task(
     Ok(SaveResult { pr_number: pr_number as i64, summary })
 }
 
+// ── M5: 업데이터 감지(앱 내 안내 — P7 수동 재다운로드) ──────────────
+
+/// 배포 서명 공개키(minisign) — 릴리스 시크릿 MINISIGN_SECRET_KEY와 한 쌍.
+/// 교체 시 apps/download-page/index.html 자리표시자와 동시 갱신(단일 소스).
+pub const UPDATE_PUBLIC_KEY: &str = "MINISIGN_PUBKEY_PLACEHOLDER";
+
+#[derive(serde::Serialize)]
+pub struct UpdateNoticeDto {
+    pub has_update: bool,
+    pub notice: String,
+    pub download_url: String,
+}
+
+#[tauri::command]
+async fn check_update(app: tauri::AppHandle) -> Result<UpdateNoticeDto, String> {
+    let (gh, owner_repo, _pat) = {
+        let app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || github_from_custody(&app))
+            .await
+            .map_err(|e| e.to_string())?
+    }?;
+    let current = app.package_info().version.to_string();
+    let check = ai_note_core::update::check_for_update(&gh, &owner_repo, &current, UPDATE_PUBLIC_KEY).await;
+    let notice = ai_note_core::update::update_notice(&check);
+    let download_url = match &check {
+        ai_note_core::update::UpdateCheck::Available { download_url, .. } => download_url.clone(),
+        _ => String::new(),
+    };
+    Ok(UpdateNoticeDto {
+        has_update: matches!(check, ai_note_core::update::UpdateCheck::Available { .. }),
+        notice,
+        download_url,
+    })
+}
+
 // ── M4: 검토함·이력 브리지 ─────────────────────────────────────────
 
 #[tauri::command]
@@ -577,6 +614,7 @@ pub fn run() {
             claude_manual_steps,
             subscription_state,
             subscription_guide,
+            check_update,
             review_inbox,
             review_diff,
             review_approve,

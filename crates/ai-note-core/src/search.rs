@@ -42,6 +42,8 @@ pub struct VaultSearch {
 pub struct IncrementalStats {
     pub docs_indexed: usize,
     pub docs_skipped: usize,
+    /// 삭제/이름변경으로 유령 색인에서 정리된 문서 수.
+    pub docs_removed: usize,
 }
 
 pub fn build_index(vault: &Repository) -> Result<VaultSearch, String> {
@@ -133,7 +135,17 @@ pub fn build_index(vault: &Repository) -> Result<VaultSearch, String> {
 pub fn build_index_incremental(vault: &Repository, index_dir: &std::path::Path) -> Result<(VaultSearch, IncrementalStats), String> {
     std::fs::create_dir_all(index_dir).map_err(|e| e.to_string())?;
     let index = if index_dir.join("meta.json").exists() {
-        Index::open_in_dir(index_dir).map_err(|e| format!("색인 열기 실패: {e}"))?
+        let idx = Index::open_in_dir(index_dir).map_err(|e| format!("색인 열기 실패: {e}"))?;
+        // 구버전 스키마(blob_oid 없음)는 조용한 필드 오용 대신 재생성.
+        if idx.schema().get_field("blob_oid").is_err() {
+            drop(idx);
+            std::fs::remove_dir_all(index_dir).map_err(|e| e.to_string())?;
+            std::fs::create_dir_all(index_dir).map_err(|e| e.to_string())?;
+            Index::create_in_dir(index_dir, schema_of())
+                .map_err(|e| format!("색인 생성 실패: {e}"))?
+        } else {
+            idx
+        }
     } else {
         Index::create_in_dir(index_dir, schema_of()).map_err(|e| format!("색인 생성 실패: {e}"))?
     };
@@ -148,69 +160,83 @@ pub fn build_index_incremental(vault: &Repository, index_dir: &std::path::Path) 
         .map_err(|e| e.to_string())?;
     let tree = main.tree().map_err(|e| e.to_string())?;
 
-    // 기존 색인의 (경로→blob oid) 지도
-    let reader = index.reader().map_err(|e| format!("색인 읽기 준비 실패: {e}"))?;
-    let searcher = reader.searcher();
-    let path_field = index.schema().get_field("path").map_err(|e| e.to_string())?;
-    let oid_field = index
-        .schema()
-        .get_field("blob_oid")
-        .map_err(|_| "색인 구버전 — 전량 재색인으로 마이그레이션".to_string())
-        .or_else(|_| index.schema().get_field("path").map_err(|e| e.to_string()))?;
-    let mut known: std::collections::HashMap<String, String> = Default::default();
-    for seg in searcher.segment_readers() {
-        for doc_id in seg.doc_ids_alive() {
-            let addr = tantivy::DocAddress {
-                segment_ord: searcher.segment_readers().iter().position(|s| std::ptr::eq(s, seg)).unwrap_or(0) as u32,
-                doc_id,
-            };
-            if let Ok(doc) = searcher.doc::<TantivyDocument>(addr) {
-                let path = doc.get_first(path_field).and_then(|v| v.as_str()).unwrap_or_default().to_string();
-                let oid = doc.get_first(oid_field).and_then(|v| v.as_str()).unwrap_or_default().to_string();
-                if !path.is_empty() {
-                    known.insert(path, oid);
+    // 현 트리 문서를 먼저 수집(경로, blob oid, 내용)
+    let mut docs: Vec<(String, String, String)> = Vec::new();
+    walk_md(vault, &tree, "", &mut |path, oid_hex, content| {
+        docs.push((path.to_string(), oid_hex.to_string(), content.to_string()));
+    });
+
+    // 기존 색인의 (경로→blob oid) 지도 — reader는 writer 전 명시 종료
+    let known: std::collections::HashMap<String, String> = {
+        let reader = index.reader().map_err(|e| format!("색인 읽기 준비 실패: {e}"))?;
+        let searcher = reader.searcher();
+        let path_field = index.schema().get_field("path").map_err(|e| e.to_string())?;
+        let oid_field = index.schema().get_field("blob_oid").map_err(|e| e.to_string())?;
+        let mut m: std::collections::HashMap<String, String> = Default::default();
+        for seg_ord in 0..searcher.segment_readers().len() as u32 {
+            let seg = searcher.segment_reader(seg_ord);
+            for doc_id in seg.doc_ids_alive() {
+                let addr = tantivy::DocAddress { segment_ord: seg_ord, doc_id };
+                if let Ok(doc) = searcher.doc::<TantivyDocument>(addr) {
+                    let path = doc.get_first(path_field).and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                    let oid = doc.get_first(oid_field).and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                    if !path.is_empty() {
+                        m.insert(path, oid);
+                    }
                 }
             }
         }
-    }
+        drop(searcher);
+        drop(reader);
+        m
+    };
 
+    let path_field = index.schema().get_field("path").map_err(|e| e.to_string())?;
+    let oid_field = index.schema().get_field("blob_oid").map_err(|e| e.to_string())?;
+    let body_field = index.schema().get_field("body").map_err(|e| e.to_string())?;
     let mut writer = index.writer(15_000_000).map_err(|e| format!("색인 준비 실패: {e}"))?;
     let mut stats = IncrementalStats::default();
-    walk_md(vault, &tree, "", &mut |path, oid_hex, content| {
-        if known.get(path).map(|k| k.as_str()) == Some(oid_hex) {
+    let mut seen: std::collections::HashSet<String> = Default::default();
+    for (path, oid_hex, content) in &docs {
+        seen.insert(path.clone());
+        if known.get(path).map(|k| k.as_str()) == Some(oid_hex.as_str()) {
             stats.docs_skipped += 1;
-            return;
+            continue;
         }
         let _ = writer.delete_term(tantivy::Term::from_field_text(path_field, path));
-        let p_field = path_field;
-        let o_field = oid_field;
         let _ = writer.add_document(doc!(
-            p_field => path.to_string(),
-            o_field => oid_hex.to_string(),
-            index.schema().get_field("body").map_err(|e| e.to_string()).unwrap() => content.to_string(),
+            path_field => path.clone(),
+            oid_field => oid_hex.clone(),
+            body_field => content.clone(),
         ));
         stats.docs_indexed += 1;
-    });
+    }
+    // 삭제/이름변경 스윕 — 현 트리에 없는 유령 색인 제거(영구 잔존 방지)
+    for ghost in known.keys() {
+        if !seen.contains(ghost) {
+            let _ = writer.delete_term(tantivy::Term::from_field_text(path_field, ghost));
+            stats.docs_removed += 1;
+        }
+    }
     writer.commit().map_err(|e| format!("색인 확정 실패: {e}"))?;
     let reader = index.reader().map_err(|e| e.to_string())?;
+    reader.reload().map_err(|e| e.to_string())?;
     Ok((VaultSearch { index, reader }, stats))
 }
 
 fn schema_of() -> Schema {
     let mut builder = Schema::builder();
-    let indexing = TextFieldIndexing::default()
+    let gram_indexing = TextFieldIndexing::default()
         .set_index_option(IndexRecordOption::WithFreqsAndPositions)
         .set_tokenizer("ko_bigram");
-    let text_opts = tantivy::schema::TextOptions::default()
-        .set_indexing_options(indexing.clone())
+    let gram_opts = tantivy::schema::TextOptions::default()
+        .set_indexing_options(gram_indexing)
         .set_stored();
-    builder.add_text_field("path", text_opts.clone());
-    builder.add_text_field("body", text_opts.clone());
-    // blob oid — 증분 스킵 판정 키(저장 전용)
-    builder.add_text_field(
-        "blob_oid",
-        tantivy::schema::TextOptions::default().set_stored(),
-    );
+    // path/oid는 STRING(raw 단일 토큰) — delete_term이 정확히 매칭되려면
+    // 색인 용어가 원문 그대로여야 한다(기본 토크나이저는 a.md → a/md 분해).
+    builder.add_text_field("path", tantivy::schema::STRING | tantivy::schema::STORED);
+    builder.add_text_field("blob_oid", tantivy::schema::STRING | tantivy::schema::STORED);
+    builder.add_text_field("body", gram_opts);
     builder.build()
 }
 
@@ -245,6 +271,11 @@ fn walk_md(
 }
 
 impl VaultSearch {
+    /// 진단용 — 살아있는 문서 수(테스트·디버그).
+    pub fn reader_debug_num_docs(&self) -> u64 {
+        self.reader.searcher().num_docs()
+    }
+
     /// 검색 — 빅그램 토큰화된 본문 일치. 최대 limit건(기본 20).
     /// 스니펫은 본문에서 쿼리 첫 토큰 주변 ±40자, byte_offset은 그 지점.
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, String> {
@@ -501,5 +532,57 @@ mod tests {
         assert_eq!(stats2.docs_indexed, 1, "변경 문서만 재색인");
         assert_eq!(stats2.docs_skipped, 2999, "나머지 스킵 — 증분 상한 증명");
         assert!(!s2.search("유일키워드마감", 10).unwrap().is_empty(), "새 내용 검색 가능");
+    }
+
+    /// M5 증분 색인 — 삭제/이름변경 문서의 유령 히트 소멸(스윕).
+    #[test]
+    fn m5_incremental_index_sweeps_deleted_docs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let index_dir = tmp.path().join("idx");
+        let repo = git2::Repository::init(tmp.path().join("r")).unwrap();
+        fn commit(repo: &git2::Repository, files: &[(&str, &str)]) {
+            let mut index = repo.index().unwrap();
+            // 직전 커밋의 인덱스 잔존 리셋 — 전달 파일 집합이 트리 전부가 되도록
+            let empty_tree = repo.treebuilder(None).unwrap().write().unwrap();
+            index.read_tree(&repo.find_tree(empty_tree).unwrap()).unwrap();
+            for (p, c) in files {
+                index
+                    .add_frombuffer(
+                        &git2::IndexEntry {
+                            ctime: git2::IndexTime::new(0, 0),
+                            mtime: git2::IndexTime::new(0, 0),
+                            dev: 0, ino: 0, mode: 0o100644, uid: 0, gid: 0,
+                            file_size: c.len() as u32,
+                            id: git2::Oid::zero(), flags: 0, flags_extended: 0,
+                            path: p.as_bytes().to_vec(),
+                        },
+                        c.as_bytes(),
+                    )
+                    .unwrap();
+            }
+            let tree_id = index.write_tree().unwrap();
+            let tree = repo.find_tree(tree_id).unwrap();
+            let sig = git2::Signature::now("t", "t@local").unwrap();
+            let parent = repo
+                .find_reference("refs/heads/main")
+                .ok()
+                .and_then(|r| r.peel_to_commit().ok());
+            let parents: Vec<&git2::Commit> = parent.iter().collect();
+            let c = repo.commit(Some("refs/heads/main"), &sig, &sig, "c", &tree, &parents).unwrap();
+            let commit = repo.find_commit(c).unwrap();
+            repo.branch("main", &commit, true).unwrap();
+        }
+        commit(&repo, &[("a.md", "회의 초안 유니크원"), ("b.md", "보조 문서")]);
+        let (s1, st1) = build_index_incremental(&repo, &index_dir).unwrap();
+        assert_eq!(st1.docs_indexed, 2);
+        assert!(!s1.search("유니크원", 10).unwrap().is_empty());
+
+        // a.md 삭제(트리에서 제거) → 유령 히트 소멸 단언
+        commit(&repo, &[("b.md", "보조 문서")]);
+        let (s2, st2) = build_index_incremental(&repo, &index_dir).unwrap();
+        assert_eq!(st2.docs_removed, 1, "삭제 문서 색인 정리");
+        let ghost_hits = s2.search("유니크원", 10).unwrap();
+        eprintln!("GHOST HITS: {:?}", ghost_hits.iter().map(|h| &h.path).collect::<Vec<_>>());
+        assert!(ghost_hits.is_empty(), "유령 히트 소멸");
     }
 }

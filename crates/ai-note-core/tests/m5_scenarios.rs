@@ -18,11 +18,11 @@ async fn m5_update_detect_e2e_signature_verified() {
         .mount(&server)
         .await;
     // checksums.txt = 데이터 "test"(벡터와 정합), 서명 = 공개 벡터 서명
-    Mock::given(method("GET")).and(path("/release-assets/checksums.txt"))
+    Mock::given(method("GET")).and(path("/repos/team/notes/releases/download/v1.0.0/checksums.txt"))
         .respond_with(ResponseTemplate::new(200).set_body_string("test"))
         .mount(&server)
         .await;
-    Mock::given(method("GET")).and(path("/release-assets/checksums.txt.minisig"))
+    Mock::given(method("GET")).and(path("/repos/team/notes/releases/download/v1.0.0/checksums.txt.minisig"))
         .respond_with(ResponseTemplate::new(200).set_body_string(
             "untrusted comment: signature from minisign secret key\nRWQf6LRCGA9i59SLOFxz6NxvASXDJeRtuZykwQepbDEGt87ig1BNpWaVWuNrm73YiIiJbq71Wi+dP9eKL8OC351vwIasSSbXxwA=\ntrusted comment: timestamp:1555779966\tfile:test\nQtKMXWyYcwdpZAlPF7tE2ENJkRd1ujvKjlj1m9RtHTBnZPa5WKU5uWRs5GoP5M/VqE81QFuMKI5k/SfNQUaOAA==",
         ))

@@ -34,6 +34,8 @@ export const ui = {
   },
   history: { title: "지난 기록", applied: "반영됨", rejected: "도로 돌림", empty: "아직 기록이 없어요" },
   settings: {
+    updateTitle: "새 버전 확인",
+    updateDownload: "새 설치 파일 받으러 가기",
     title: "설정",
     accountLabel: "내 계정",
     vaultLabel: "팀 노트 저장소",

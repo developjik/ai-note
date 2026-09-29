@@ -198,11 +198,12 @@ impl GithubService {
         Ok((status, String::from_utf8_lossy(&bytes).to_string()))
     }
 
-    /// 릴리스 자산 본문 조회(업데이터 검증 재료 — wiremock 테스트용 최소 경로).
-    pub async fn raw_get_text(&self, _release: &str, asset: &str) -> Result<String, GithubError> {
+    /// 릴리스 자산 본문 조회 — 실제 GitHub 자산 경로
+    /// (/repos/{o}/{r}/releases/download/{tag}/{asset})로 받는다.
+    pub async fn release_asset(&self, owner_repo: &str, tag: &str, asset: &str) -> Result<String, GithubError> {
         let resp = self
             .client
-            ._get(&format!("/release-assets/{asset}"))
+            ._get(&format!("/repos/{owner_repo}/releases/download/{tag}/{asset}"))
             .await
             .map_err(github_err)?;
         if !resp.status().is_success() {
