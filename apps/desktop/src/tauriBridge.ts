@@ -46,6 +46,7 @@ export function installBridge(
       typed("workspace_save", { path, content }),
   };
   windowObj.__aiNoteSettings = {
+    checkUpdate: () => typed("check_update"),
     accountDisplay: () => typed("account_display"),
     connectedRepo: () => typed("connected_repo"),
     appVersion: () => typed("app_version"),

@@ -34,16 +34,13 @@ export function SettingsScreen({ bridge }: { bridge?: SettingsBridge }) {
   }, [b]);
 
   useEffect(() => {
-    b?.checkUpdate?.().then(setUpdate).catch(() => setUpdate(null));
-  }, [b]);
-
-  useEffect(() => {
     if (!b) return;
     (async () => {
       setDisplay(await b.accountDisplay());
       setRepo(await b.connectedRepo());
       setVersion(await b.appVersion());
     })();
+    b.checkUpdate?.().then(setUpdate).catch(() => setUpdate(null));
   }, [b]);
 
   async function disconnect() {

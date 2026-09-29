@@ -98,5 +98,5 @@ jobs:
       - uses: actions/checkout@v4
       - name: 다운로드 페이지 자리표시자 잔존 검사
         run: |
-          ! grep -q "MINISIGN_PUBKEY_PLACEHOLDER" apps/download-page/index.html || {
-            echo "공개키 자리표시자가 아직 교체되지 않았어요 — 릴리스 전 필수"; exit 1; }
+          ! grep -rq "MINISIGN_PUBKEY_PLACEHOLDER" apps/download-page/index.html apps/desktop/src-tauri/src/lib.rs || {
+            echo "공개키 자리표시자가 아직 교체되지 않았어요 — 릴리스 전 필수(페이지+앱 상수 양쪽)"; exit 1; }
