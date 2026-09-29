@@ -25,19 +25,21 @@ origin/main ──┐
 
 ## 3. 수퍼셋 누적과 비순차 승인 (F20)
 - 승인 순서대로 반영한다. 대기 중 cs의 `base_commit`이 원격 main HEAD보다 뒤면:
-  - **자동 수렴(3-way)**: libgit2 merge(S2 증명 루프) — 반영 충돌 없으면 자동 재작성 후 새 cs로 갱신.
+  - **자동 수렴(3-way)**: libgit2 `merge_trees`(트리 수준·무전환 — S2 증명 루프의 `repo.merge`+force 체크아웃과 달리 작업 트리를 전혀 건드리지 않음) — 반영 충돌 없으면 자동 재작성 후 새 cs로 갱신.
   - **충돌 시**: AI 해소 작업(agent 모듈, 재시도 상한 3 → 초과 시 자동 취소+일상 언어 알림+재제출 유도, R7).
   - **이미 반영됨 판정**: 변경 내용이 이전 승인 머지에 완전 포함(동일 파일·동일 해시)되면 '이미 반영됨'(F32) — GitHub 머지 원자성이 이중 반영 차단.
 - 비순차 승인 예: cs-B가 cs-A보다 먼저 승인되면 cs-A의 base는 뒤처짐 → 위 수렴 절차 동일 적용. 순서 강제 없음(F20 '승인 순 반영' = 승인된 것부터 즉시 반영).
 
 ## 4. 상태머신 (review 모듈 소유)
 ```text
-draft ──제출──▶ pending_review ──첫 승인──▶ applied
-                     │ 기각                     ▲
-                     ▼                          │ (수렴 후 재승인)
+draft ──제출──▶ pending_review ──첫 승인(반영 성공)──▶ applied
+                     │ 기각                       ▲
+                     ▼                            │ (수렴 후 재승인)
                 rejected ──작성자 재제출──▶ pending_review
-                     └──AI 충돌 해소 중──▶ resolving ──성공──▶ pending_review(갱신)
-                                            └──상한 초과──▶ cancelled+알림
+                     ▲
+                     │ 반영 시도 충돌(§3 수렴 실패 — 시나리오 4)
+                pending_review ──AI 충돌 해소 중──▶ resolving ──성공──▶ pending_review(갱신)
+                                                    └──상한 초과──▶ cancelled+알림
 ```
 - 전이는 SQLite(state 모듈)에 영속 — 앱 재시작 후 복원.
 - `applied` 시 작성자 뷰에서 '검토 중' 초안 제거(A4), 이력 화면에 표시(F29).
@@ -62,3 +64,10 @@ draft ──제출──▶ pending_review ──첫 승인──▶ applied
 | 5 | AI 해소 3회 실패 | cancelled + 일상 언어 알림 + 재제출 유도(R7) |
 | 6 | 기각 → 재제출 | rejected → pending_review, 원문 유지(F21) |
 | 7 | 앱 재시작 중간 상태 | SQLite에서 상태 복원, cs 브랜치 정합성 검사 |
+
+## 8. architect 서명 (D0 게이트 — M2 착수 승인)
+
+- 판정: **CLEAR / APPROVE** (2026-09-30, architect 서브에이전트 리뷰 — 과제 11-D0-Architect-Signoff)
+- 근거 요약: 상태머신 F20/F21/F32/R7 전 커버, 무전환 cs/<id> 토폴로지가 git2 0.20.4 API(Index::read_tree·add_frombuffer·Repository::merge_trees)로 성립함을 확인, 모듈 소유 경계 순환 없음.
+- 서명 조건부 정정 2건 반영: §3 merge_trees 명시, §4 resolving 간선을 pending_review(반영 시도 충돌)에서 발화하도록 정정.
+- 지적 유지 항목(비차단): 수렴 판정의 base 낡음 감지는 M4 알림 폴링(ETag)과 정합 설계, 시나리오 7의 cs 브랜치 정합성 검사는 원격 브랜치 존재 재확인 포함.
