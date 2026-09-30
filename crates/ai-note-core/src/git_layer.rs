@@ -385,6 +385,16 @@ pub fn converge_cs(
     Ok(oid.to_string())
 }
 
+/// 테스트 전용 로컬 file:// URL 빌더. Windows에서 `\\?\` UNC 프리픽스와
+/// 역슬래시를 정규화한다 — libgit2는 `file://C:/...` 형태만 로컬 원격으로 해석.
+#[cfg(test)]
+pub(crate) fn file_url(p: &Path) -> String {
+    let s = p.to_string_lossy().to_string();
+    #[cfg(windows)]
+    let s = s.strip_prefix(r"\\?\").unwrap_or(&s).replace('\\', "/");
+    format!("file://{s}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -396,7 +406,7 @@ mod tests {
         let origin_path = tmp.path().join("origin.git");
         std::fs::create_dir_all(&origin_path).unwrap();
         Repository::init_bare(&origin_path).unwrap();
-        let url = format!("file://{}", origin_path.canonicalize().unwrap().display());
+        let url = file_url(&origin_path);
 
         // 앱 측: 임시 클론에서 init_and_push_first 수행
         let staging = tmp.path().join("app-side");
@@ -446,7 +456,7 @@ mod tests {
         let origin_path = tmp.path().join("origin.git");
         std::fs::create_dir_all(&origin_path).unwrap();
         Repository::init_bare(&origin_path).unwrap();
-        let url = format!("file://{}", origin_path.canonicalize().unwrap().display());
+        let url = file_url(&origin_path);
         let staging = tmp.path().join("vault");
         let vault = Repository::init(&staging).unwrap();
         init_and_push_first(&vault, &url, "ghp_t", "팀").unwrap();

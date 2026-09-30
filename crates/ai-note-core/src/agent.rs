@@ -394,7 +394,12 @@ pub fn collect_changes(snapshot: &Path) -> Vec<CsFile> {
                 walk(&p, base, out);
                 continue;
             }
-            let rel = p.strip_prefix(base).unwrap_or(&p).to_string_lossy().to_string();
+            // 볼트 상대 경로는 git·UI 규약대로 `/` 구분자로 통일(Windows `\` 유입 방지)
+            let rel = p
+                .strip_prefix(base)
+                .unwrap_or(&p)
+                .to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/");
             if rel.is_empty() || rel.starts_with('.') {
                 continue;
             }

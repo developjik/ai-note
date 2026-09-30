@@ -34,17 +34,19 @@ fn parse_version(output: &str) -> Option<String> {
     best
 }
 
-/// 설치 상태 감지 — PATH에서 claude 실행(없으면 빠른 실패).
+/// 설치 상태 감지 — 현재 프로세스 PATH에서 claude 실행(없으면 빠른 실패).
 pub fn detect() -> InstallState {
+    detect_program("claude")
+}
+
+/// 감지 코어 — 프로그램 경로를 주입받는다. 테스트가 실제 설치 상태와 무관하게
+/// 가짜 claude 실행파일로 감지·분류 동작을 검증할 수 있게 분리했다.
+fn detect_program(claude: &str) -> InstallState {
     // 감지는 PATH·HOME만 유지한 최소 환경으로 실행한다(버전 확인은 비밀
     // 접근 불가). 에이전트 실구동(M3)은 전체 스크럽+S6 샌드박스를 적용.
-    let out = Command::new("claude")
+    let out = Command::new(claude)
         .arg("--version")
         .env_clear()
-        .env(
-            "PATH",
-            std::env::var("PATH").unwrap_or_default(),
-        )
         .env("HOME", std::env::var("HOME").unwrap_or_default())
         .output();
     match out {
@@ -142,15 +144,49 @@ mod tests {
         assert_eq!(MIN_SUPPORTED, (2, 0));
     }
 
-    /// 이 개발기계에는 claude 2.1.270이 설치되어 있다(S1 실측) — 감지 통과.
-    #[test]
-    fn m1_detect_on_dev_machine() {
-        match detect() {
-            InstallState::Ready { version } => {
-                assert!(version.starts_with("2."), "버전: {version}");
-            }
-            other => panic!("개발기계 감지 실패: {other:?}"),
+    /// 가짜 claude 실행파일 생성(플랫폼별 스크립트) — 감지 동작을 실제 설치
+    /// 상태와 무관하게 검증한다(호스트 의존 테스트 금지 — CI 매트릭스 필수).
+    fn fake_claude(dir: &std::path::Path, version_output: &str) -> String {
+        let fake = dir.join(if cfg!(windows) { "claude.cmd" } else { "claude" });
+        #[cfg(windows)]
+        std::fs::write(&fake, format!("@echo {version_output}\r\n")).unwrap();
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::write(&fake, format!("#!/bin/sh\necho \"{version_output}\"\n")).unwrap();
+            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
+        fake.to_string_lossy().into_owned()
+    }
+
+    /// 설치된 claude(S1 실측 형태의 버전 출력) → Ready.
+    #[test]
+    fn m1_detect_installed_claude_is_ready() {
+        let tmp = tempfile::tempdir().unwrap();
+        match detect_program(&fake_claude(tmp.path(), "2.1.270 (Claude Code)")) {
+            InstallState::Ready { version } => assert_eq!(version, "2.1.270"),
+            other => panic!("설치됨으로 감지돼야 함: {other:?}"),
+        }
+    }
+
+    /// 지원 하한 미만(1.x) → 구버전 안내 대상 분류.
+    #[test]
+    fn m1_detect_old_version_is_outdated() {
+        let tmp = tempfile::tempdir().unwrap();
+        match detect_program(&fake_claude(tmp.path(), "1.0.9")) {
+            InstallState::Outdated { version } => assert_eq!(version, "1.0.9"),
+            other => panic!("구버전으로 분류돼야 함: {other:?}"),
+        }
+    }
+
+    /// 실행 불가 경로 → 미설치(설치 안내 경로). Windows v1은 AI 작업 제외
+    /// (위협모델 §5)라 이 분류가 Windows CI 매트릭스의 유일한 감지 결과다.
+    #[test]
+    fn m1_detect_missing_claude_is_not_installed() {
+        assert_eq!(
+            detect_program("이-경로에-claude-없음"),
+            InstallState::NotInstalled
+        );
     }
 
     #[test]
