@@ -41,6 +41,8 @@ jobs:
         env:
           # 무서명 v1(Q1) — 서명 시크릿 없음: 경고 우회는 다운로드 페이지 안내
           APPLE_CERTIFICATE: ""
+          # Release 게시에 필수 — 누락 시 "GITHUB_TOKEN is required"로 실패(실측)
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "AI Note ${{ github.ref_name }}"
