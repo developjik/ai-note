@@ -358,7 +358,7 @@ async fn agent_run_task(
 
 /// 배포 서명 공개키(minisign) — 릴리스 시크릿 MINISIGN_SECRET_KEY와 한 쌍.
 /// 교체 시 apps/download-page/index.html 자리표시자와 동시 갱신(단일 소스).
-pub const UPDATE_PUBLIC_KEY: &str = "MINISIGN_PUBKEY_PLACEHOLDER";
+pub const UPDATE_PUBLIC_KEY: &str = "RWSiLA5GhJ3EBXWtVDFWHMMc86RJyvK7uyx9oAA9cHwqoLEkOelk97Xd";
 
 #[derive(serde::Serialize)]
 pub struct UpdateNoticeDto {

@@ -81,7 +81,9 @@ jobs:
           if [ -n "${{ secrets.MINISIGN_SECRET_KEY }}" ]; then
             printf '%s' "${{ secrets.MINISIGN_SECRET_KEY }}" > /tmp/ms.key
             brew install minisign || true
-            minisign -S -s /tmp/ms.key -m checksums.txt -x checksums.txt.minisig
+            # 빈 패스프레이즈 키도 -S가 프롬프트를 열므로 stdin으로 공급해야
+            # 한다 — Actions run 스텝은 stdin이 닫혀 있어 직접 실행 시 실패.
+            printf '\n' | minisign -S -s /tmp/ms.key -m checksums.txt -x checksums.txt.minisig
             rm /tmp/ms.key
             gh release upload "$TAG" checksums.txt checksums.txt.minisig --clobber
           else
