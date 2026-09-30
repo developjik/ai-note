@@ -29,7 +29,7 @@ async fn fixture() -> Fixture {
     let origin_path = tmp.path().join("origin.git");
     std::fs::create_dir_all(&origin_path).unwrap();
     Repository::init_bare(&origin_path).unwrap();
-    let remote_url = format!("file://{}", origin_path.canonicalize().unwrap().display());
+    let remote_url = git_layer::local_remote(&origin_path);
     let staging = tmp.path().join("vault");
     let vault = Repository::init(&staging).unwrap();
     git_layer::init_and_push_first(&vault, &remote_url, "ghp_t", "팀").unwrap();
@@ -113,7 +113,7 @@ async fn m2_scenario_1_single_cs_applied() {
     assert_eq!(out, ApproveOutcome::Applied);
     assert_eq!(cs.state, CsState::Applied);
     // 원격에 cs 브랜치 도달
-    let origin = Repository::open_bare(f.remote_url.trim_start_matches("file://")).unwrap();
+    let origin = Repository::open_bare(&f.remote_url).unwrap();
     assert!(origin.find_reference("refs/heads/cs/s1").is_ok());
     // 머지 API가 실제로 호출됐는지(wiremock 검증)
     let gets = f.server.received_requests().await.unwrap();
@@ -336,6 +336,6 @@ async fn m2_scenario_7_restart_restores_state() {
 
     // cs 브랜치 정합성: 로컬 cs 브랜치 + 원격 cs 브랜치 존재(architect 지적 반영)
     assert!(f.vault.find_reference("refs/heads/cs/s7").is_ok());
-    let origin = Repository::open_bare(f.remote_url.trim_start_matches("file://")).unwrap();
+    let origin = Repository::open_bare(&f.remote_url).unwrap();
     assert!(origin.find_reference("refs/heads/cs/s7").is_ok(), "원격 cs 브랜치 존재 재확인");
 }

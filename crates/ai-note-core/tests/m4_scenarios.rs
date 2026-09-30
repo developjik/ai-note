@@ -27,7 +27,7 @@ async fn fixture() -> Fixture {
     let origin_path = tmp.path().join("origin.git");
     std::fs::create_dir_all(&origin_path).unwrap();
     Repository::init_bare(&origin_path).unwrap();
-    let remote_url = format!("file://{}", origin_path.canonicalize().unwrap().display());
+    let remote_url = git_layer::local_remote(&origin_path);
     let staging = tmp.path().join("vault");
     let vault = Repository::init(&staging).unwrap();
     git_layer::init_and_push_first(&vault, &remote_url, "ghp_t", "팀").unwrap();

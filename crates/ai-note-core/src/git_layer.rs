@@ -390,12 +390,12 @@ pub fn converge_cs(
     Ok(oid.to_string())
 }
 
-/// 테스트 전용 로컬 원격 문자열 — libgit2 로컬 전송이 버전·플랫폼 무관하게
-/// 받는 일반 절대경로(Windows `\\?\` UNC 프리픽스 제거, 구분자 `/` 정규화).
-/// file:// URL은 libgit2가 로컬 전송으로 해석하지 않는 조합이 있어 Windows
-/// 러너에서 "failed to resolve path"로 실패한다(공개 CI 실측).
-#[cfg(test)]
-pub(crate) fn local_remote(p: &Path) -> String {
+/// 로컬 원격 문자열 — libgit2 로컬 전송이 버전·플랫폼 무관하게 받는 일반
+/// 절대경로(Windows `\\?\` UNC 프리픽스 제거, 구분자 `/` 정규화). 로컬 bare
+/// 원격 시딩이 필요한 테스트(lib·통합)가 공용으로 사용한다. file:// URL은
+/// libgit2가 로컬 전송으로 해석하지 않는 조합이 있어 Windows에서
+/// "failed to resolve path"로 실패한다(공개 CI 실측).
+pub fn local_remote(p: &Path) -> String {
     let s = p.to_string_lossy().to_string();
     #[cfg(windows)]
     let s = s.strip_prefix(r"\\?\").unwrap_or(&s).replace('\\', "/");
