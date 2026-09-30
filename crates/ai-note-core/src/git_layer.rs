@@ -135,10 +135,15 @@ pub fn push_branch(vault: &Repository, url: &str, pat: &str, refspec: &str) -> s
 /// 로컬 bare에서는 symbolic ref 갱신으로 수행한다.
 /// (https 원격의 HEAD는 GitHub API 기본 분기 설정으로 M1 브리지가 처리)
 fn set_remote_head_main(url: &str, _pat: &str) {
-    if let Some(path) = url.strip_prefix("file://") {
-        if let Ok(remote_repo) = Repository::open_bare(path) {
-            let _ = remote_repo.reference_symbolic("HEAD", "refs/heads/main", true, "main 기본 분기 설정");
-        }
+    // file:// URL과 일반 로컬 절대경로(테스트 시딩) 모두 허용 — 실제 원격(https)
+    // 는 open 실패로 조용히 무시된다.
+    let mut path = url.strip_prefix("file://").unwrap_or(url);
+    // 표준 3슬래시 file:///C:/.. 형태의 드라이브 문자 앞 슬래시 제거
+    if path.len() > 2 && path.starts_with('/') && path.as_bytes()[2] == b':' {
+        path = &path[1..];
+    }
+    if let Ok(remote_repo) = Repository::open_bare(path) {
+        let _ = remote_repo.reference_symbolic("HEAD", "refs/heads/main", true, "main 기본 분기 설정");
     }
 }
 
@@ -385,14 +390,16 @@ pub fn converge_cs(
     Ok(oid.to_string())
 }
 
-/// 테스트 전용 로컬 file:// URL 빌더. Windows에서 `\\?\` UNC 프리픽스와
-/// 역슬래시를 정규화한다 — libgit2는 `file://C:/...` 형태만 로컬 원격으로 해석.
+/// 테스트 전용 로컬 원격 문자열 — libgit2 로컬 전송이 버전·플랫폼 무관하게
+/// 받는 일반 절대경로(Windows `\\?\` UNC 프리픽스 제거, 구분자 `/` 정규화).
+/// file:// URL은 libgit2가 로컬 전송으로 해석하지 않는 조합이 있어 Windows
+/// 러너에서 "failed to resolve path"로 실패한다(공개 CI 실측).
 #[cfg(test)]
-pub(crate) fn file_url(p: &Path) -> String {
+pub(crate) fn local_remote(p: &Path) -> String {
     let s = p.to_string_lossy().to_string();
     #[cfg(windows)]
     let s = s.strip_prefix(r"\\?\").unwrap_or(&s).replace('\\', "/");
-    format!("file://{s}")
+    s
 }
 
 #[cfg(test)]
@@ -406,7 +413,7 @@ mod tests {
         let origin_path = tmp.path().join("origin.git");
         std::fs::create_dir_all(&origin_path).unwrap();
         Repository::init_bare(&origin_path).unwrap();
-        let url = file_url(&origin_path);
+        let url = local_remote(&origin_path);
 
         // 앱 측: 임시 클론에서 init_and_push_first 수행
         let staging = tmp.path().join("app-side");
@@ -437,9 +444,9 @@ mod tests {
     #[test]
     fn m1_clone_bad_remote_is_friendly_error() {
         let tmp = tempfile::tempdir().unwrap();
-        let url = format!("file://{}/nope.git", tmp.path().display());
+        let url = format!("{}/nope.git", local_remote(tmp.path()));
         let err = clone_vault(&url, "ghp_x", &tmp.path().join("dst"));
-        // file:// 부재 원격은 NotFound 계열 — Other/Network 어느 쪽이든 친구 메시지여야
+        // 부재 로컬 원격은 NotFound 계열 — Other/Network 어느 쪽이든 친구 메시지여야
         match err {
             Err(GitError::Network(m)) | Err(GitError::Other(m)) => {
                 assert!(m.contains("클론") || m.contains("연결"), "메시지: {m}");
@@ -456,7 +463,7 @@ mod tests {
         let origin_path = tmp.path().join("origin.git");
         std::fs::create_dir_all(&origin_path).unwrap();
         Repository::init_bare(&origin_path).unwrap();
-        let url = file_url(&origin_path);
+        let url = local_remote(&origin_path);
         let staging = tmp.path().join("vault");
         let vault = Repository::init(&staging).unwrap();
         init_and_push_first(&vault, &url, "ghp_t", "팀").unwrap();

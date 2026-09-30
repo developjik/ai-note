@@ -219,7 +219,7 @@ mod tests {
         let inv = invite::encode(&payload, "팀-암호").unwrap();
         let env = ConnectEnv {
             api_base: Some(server.uri()),
-            remote_base: Some(git_layer::file_url(&tmp.path().join("remote"))),
+            remote_base: Some(git_layer::local_remote(&tmp.path().join("remote"))),
         };
         let vault_root = tmp.path().join("vaults");
 
@@ -283,7 +283,7 @@ mod tests {
         }
         seed.set_head("refs/heads/main").unwrap();
         {
-            let mut remote = seed.remote("origin", &git_layer::file_url(&origin_path)).unwrap();
+            let mut remote = seed.remote("origin", &git_layer::local_remote(&origin_path)).unwrap();
             remote.push(&["refs/heads/main:refs/heads/main"], None).unwrap();
         }
         origin.set_head("refs/heads/main").unwrap();
@@ -296,7 +296,7 @@ mod tests {
         let inv = invite::encode(&payload, "팀-암호").unwrap();
         let env = ConnectEnv {
             api_base: Some(server.uri()),
-            remote_base: Some(git_layer::file_url(&remote_root)),
+            remote_base: Some(git_layer::local_remote(&remote_root)),
         };
         let vault_root = tmp.path().join("vaults");
 
