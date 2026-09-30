@@ -30,6 +30,13 @@ tantivy = "0.22"
 # git 계층 (M1 — S2 증명 기반)
 git2 = "0.20"
 
+# libgit2 HTTPS는 macOS에서도 OpenSSL 동적 링크가 기본(1.9부터 SecureTransport
+# 제거) — 빌드기계의 brew/system libssl.3.dylib에 붙어 배포기계에서 launch
+# 즉시 SIGABRT(공개 릴리스 실측). 정적 벤더링으로 바이너리 자기완결 확보.
+# Windows는 libgit2가 WinHTTP 백엔드라 제외.
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+libgit2-sys = { version = "0.18", features = ["vendored-openssl"] }
+
 # github REST (M1)
 octocrab = "0.44"
 tokio.workspace = true
