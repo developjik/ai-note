@@ -38,3 +38,5 @@ jobs:
           path: site
       - id: deployment
         uses: actions/deploy-pages@v4
+
+# 최초 push 등록 누락 보완 — 파일 재push로 워크플로 등록
