@@ -1,7 +1,7 @@
 //! S2 스파이크 — libgit2(git2 crate) 핵심 증명 (계획 M0·D).
 //!
 //! 증명 항목(계획 §8 M0-S2):
-//! 1. 클론/커밋/푸시 — 원격은 로컬 bare 저장소(file://)로 흉내
+//! 1. 클론/커밋/푸시 — 원격은 로컬 bare 저장소(일반 경로)로 흉내
 //! 2. 동시 쓰기 직렬화 — 스레드 3개가 동시 커밋·fetch를 시도하면
 //!    단일 작성자 큐를 통과해 순차 실행되고 인덱스 락 오류가 0이어야 한다
 //! 3. 로컬 3-way merge 루프 — 충돌 상태 생성→해소(재작성)→커밋 완결
@@ -24,6 +24,17 @@ impl Actor {
     }
 }
 
+/// libgit2 로컬 원격용 일반 절대경로 문자열(Windows UNC 프리픽스·역슬래시 정규화).
+/// file:// URL은 libgit2 로컬 전송이 해석하지 않는 조합이 있어 Windows에서
+/// 실패한다(공개 CI 실측).
+fn local_remote_string(p: &Path) -> String {
+    let mut s = p.to_string_lossy().to_string();
+    if cfg!(windows) {
+        s = s.strip_prefix(r"\\?\").unwrap_or(s.as_str()).replace('\\', "/");
+    }
+    s
+}
+
 /// bare 원격 + 워킹 클론 한 쌍을 만든다(테스트 픽스처).
 pub fn fixture(dir: &Path) -> Result<(Repository, Repository)> {
     let remote_path = dir.join("origin.git");
@@ -32,7 +43,7 @@ pub fn fixture(dir: &Path) -> Result<(Repository, Repository)> {
 
     let work_path = dir.join("work");
     std::fs::create_dir_all(&work_path)?;
-    let url = format!("file://{}", remote_path.canonicalize()?.display());
+    let url = local_remote_string(&remote_path);
     let repo = Repository::init(&work_path)?;
     let mut cfg = repo.config()?;
     cfg.set_str("user.name", "spike")?;
@@ -51,7 +62,7 @@ pub fn fixture(dir: &Path) -> Result<(Repository, Repository)> {
         repo.branch("main", &head_commit, true)?;
     }
 
-    // 첫 푸시(로컬 file:// 원격 — 인증 콜백 불필요)
+    // 첫 푸시(로컬 경로 원격 — 인증 콜백 불필요)
     let url2 = url.clone();
     {
         let mut remote_handle = repo.remote("origin", &url2)?;
@@ -271,7 +282,7 @@ mod tests {
 
         // 원격에 반영됐는지: 새 클론으로 검증
         let clone_path = tmp.path().join("verify-clone");
-        let url = format!("file://{}", remote.path().canonicalize().unwrap().display());
+        let url = local_remote_string(remote.path());
         let cloned = Repository::clone(&url, &clone_path).unwrap();
         let head = cloned.head().unwrap().peel_to_commit().unwrap();
         let msg = head.message().unwrap_or("");
